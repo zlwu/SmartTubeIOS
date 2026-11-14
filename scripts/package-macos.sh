@@ -11,12 +11,16 @@
 #
 # Output: releases/SmartTube-<version>-macOS-<arch>.dmg and .pkg (both gitignored).
 # Overrides: SMARTTUBE_ARCH (default arm64), SMARTTUBE_RELEASE_DIR,
-#            SMARTTUBE_DERIVED_DATA.
+#            SMARTTUBE_DERIVED_DATA, SMARTTUBE_MARKETING_VERSION,
+#            SMARTTUBE_BUILD_NUMBER.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ARCH="${SMARTTUBE_ARCH:-arm64}"
 OUT="${SMARTTUBE_RELEASE_DIR:-$ROOT/releases}"
 DERIVED="${SMARTTUBE_DERIVED_DATA:-$ROOT/build/macos-package/DerivedData}"
+VERSION_SETTINGS=()
+[ -n "${SMARTTUBE_MARKETING_VERSION:-}" ] && VERSION_SETTINGS+=("MARKETING_VERSION=$SMARTTUBE_MARKETING_VERSION")
+[ -n "${SMARTTUBE_BUILD_NUMBER:-}" ] && VERSION_SETTINGS+=("CURRENT_PROJECT_VERSION=$SMARTTUBE_BUILD_NUMBER")
 WORK="$ROOT/build/macos-package"
 APP_NAME="SmartTube"
 GSP="$ROOT/SmartTubeApp/SmartTubeApp/GoogleService-Info.plist"
@@ -36,6 +40,7 @@ xcodebuild build \
     -destination "platform=macOS,arch=$ARCH" \
     -derivedDataPath "$DERIVED" \
     CODE_SIGNING_ALLOWED=NO -quiet \
+    ${VERSION_SETTINGS[@]+"${VERSION_SETTINGS[@]}"} \
     || { echo "build failed (see xcodebuild output above)" >&2; exit 1; }
 
 APP="$DERIVED/Build/Products/Release/$APP_NAME.app"
