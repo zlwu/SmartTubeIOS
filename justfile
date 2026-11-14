@@ -39,6 +39,10 @@ build:
 build-tvos:
     xcodebuild build -workspace {{workspace}} -scheme "Smart Tube" -destination "platform=tvOS Simulator,name={{tv_sim}}" -derivedDataPath {{derived}} CODE_SIGNING_ALLOWED=NO -quiet
 
+# Local ad-hoc-signed macOS installer (.dmg + .pkg) under releases/. Not notarized.
+macos-package:
+    {{root}}/scripts/package-macos.sh
+
 test-unit:
     cd {{package}} && swift test --parallel 2>&1 | tail -30
 
