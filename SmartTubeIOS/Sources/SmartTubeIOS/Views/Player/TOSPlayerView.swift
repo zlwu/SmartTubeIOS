@@ -976,9 +976,17 @@ public struct TOSPlayerView: View {
 #if os(macOS)
 private struct YouTubeWebPlayerView: NSViewRepresentable {
     let webView: WKWebView
+    /// Fires once the view is hosted. The macOS window already exists when
+    /// SwiftUI creates this view, so the first run-loop turn is the equivalent
+    /// of the iOS key-window callback below; `startIfNeededWhenWindowReady()`
+    /// adds its own delay before loading the IFrame.
+    let onWindowReady: (() -> Void)?
 
     func makeNSView(context: Context) -> WKWebView {
         webView.autoresizingMask = [.width, .height]
+        if let onWindowReady {
+            Task { @MainActor in onWindowReady() }
+        }
         return webView
     }
 

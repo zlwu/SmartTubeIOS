@@ -4,6 +4,9 @@ import CoreFoundation
 import WebKit
 import os
 import SmartTubeIOSCore
+#if os(macOS)
+import AppKit
+#endif
 
 private let tosLog = Logger(subsystem: "com.void.smarttube.app", category: "TOSPlayer")
 
@@ -313,6 +316,21 @@ extension TOSPlayerViewModel {
         )
     }
 
+    /// PNG bytes for a snapshot image. `NSImage` has no `pngData()`, so the
+    /// macOS path re-encodes via `NSBitmapImageRep`.
+    #if os(macOS)
+    private static func pngData(from image: NSImage) -> Data? {
+        guard let tiff = image.tiffRepresentation,
+            let bitmap = NSBitmapImageRep(data: tiff)
+        else { return nil }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+    #else
+    private static func pngData(from image: UIImage) -> Data? {
+        image.pngData()
+    }
+    #endif
+
     /// Captures the WKWebView's currently-rendered content and writes it to a PNG
     /// at `path`. Used by `TOSPlayerIOSUITests` to verify that the video is
     /// actually rendering frames (not just that the playhead is advancing) —
@@ -355,7 +373,7 @@ extension TOSPlayerViewModel {
                 )
                 return
             }
-            guard let image = image, let data = image.pngData() else {
+            guard let image = image, let data = Self.pngData(from: image) else {
                 tosLog.error("[snapshot] no image/PNG data returned")
                 completion?(false)
                 CFNotificationCenterPostNotification(
