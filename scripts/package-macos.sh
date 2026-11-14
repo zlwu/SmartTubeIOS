@@ -12,7 +12,7 @@
 # Output: releases/SmartTube-<version>-macOS-<arch>.dmg and .pkg (both gitignored).
 # Overrides: SMARTTUBE_ARCH (default arm64), SMARTTUBE_RELEASE_DIR,
 #            SMARTTUBE_DERIVED_DATA, SMARTTUBE_MARKETING_VERSION,
-#            SMARTTUBE_BUILD_NUMBER.
+#            SMARTTUBE_BUILD_NUMBER, SMARTTUBE_APP_NAME_ZH (default 精油管).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ARCH="${SMARTTUBE_ARCH:-arm64}"
@@ -48,6 +48,17 @@ APP="$DERIVED/Build/Products/Release/$APP_NAME.app"
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
 BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")
 echo "==> $APP_NAME $VERSION ($BUILD)"
+
+# Localized app name shown on Chinese-language systems. The project has no
+# InfoPlist.strings resources (adding them would require project-file changes),
+# so the packaged bundle gets its zh-Hans name here.
+APP_NAME_ZH="${SMARTTUBE_APP_NAME_ZH:-精油管}"
+L10N_DIR="$APP/Contents/Resources/zh-Hans.lproj"
+mkdir -p "$L10N_DIR"
+cat >"$L10N_DIR/InfoPlist.strings" <<PLIST
+CFBundleDisplayName = "$APP_NAME_ZH";
+CFBundleName = "$APP_NAME_ZH";
+PLIST
 
 # Ad-hoc sign with the Sandbox/network subset that does not need a Team ID.
 ENTITLEMENTS="$WORK/entitlements.plist"
