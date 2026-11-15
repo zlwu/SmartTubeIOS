@@ -30,6 +30,12 @@ extension PlayerView {
                 swipeLog.notice(
                     "[PlayerView] backButton — done, presentation=\(String(describing: playerState.presentation))")
                 #else
+                #if os(macOS)
+                // Returning to browse from native full screen should leave full screen.
+                if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
+                    window.toggleFullScreen(nil)
+                }
+                #endif
                 vm.stop()
                 withAnimation(.none) { dismiss() }
                 #if os(macOS)
@@ -608,6 +614,10 @@ extension PlayerView {
         .onAppear {
             swipeLog.notice("[PlayerView] onAppear id=\(video.id)")
             isVisible = true
+            #if os(macOS)
+            // Let MainSidebarView collapse the sidebar while this player is up.
+            Notification.Name.postPlayerPresentation(true)
+            #endif
             #if os(tvOS)
             playerFocused = true
             #endif
@@ -735,6 +745,9 @@ extension PlayerView {
         .onDisappear {
             swipeLog.notice("[PlayerView] onDisappear id=\(video.id) isInBackground=\(isInBackground)")
             isVisible = false
+            #if os(macOS)
+            Notification.Name.postPlayerPresentation(false)
+            #endif
             guard !isInBackground else { return }
             #if os(iOS)
             let rawOrientationOnDisappear = UIDevice.current.orientation

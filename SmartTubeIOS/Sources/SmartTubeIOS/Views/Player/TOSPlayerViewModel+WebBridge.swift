@@ -295,6 +295,11 @@ extension TOSPlayerViewModel {
                 nil, nil, true
             )
 
+        #if os(macOS)
+        case "toggleFullscreen":
+            onToggleFullscreen?()
+        #endif
+
         default:
             break
         }

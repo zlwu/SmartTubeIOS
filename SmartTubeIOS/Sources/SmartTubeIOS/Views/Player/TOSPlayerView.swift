@@ -7,6 +7,9 @@ import os
 import UIKit
 import AVFoundation
 #endif
+#if os(macOS)
+import AppKit
+#endif
 
 private let tosViewLog = Logger(subsystem: "com.void.smarttube.app", category: "TOSPlayer")
 
@@ -73,6 +76,13 @@ public struct TOSPlayerView: View {
     @State private var showChaptersSheet = false
     /// Feedback alert for "Report Incorrect Segment" (#67) on either SponsorBlock toast.
     @State private var reportSegmentAlert: DownloadAlertItem?
+    #if os(macOS)
+    /// Local mouse monitor used to detect a real double-click on the web player.
+    @State private var doubleClickMonitor: Any?
+    /// Native window full-screen state: the top-right overlay controls are hidden in
+    /// full screen, where YouTube's own top-right controls already occupy that spot.
+    @State private var isNativeFullScreen = false
+    #endif
 
     #if os(iOS)
     // MARK: - Brightness/volume drag gesture state (#19)
@@ -246,7 +256,7 @@ public struct TOSPlayerView: View {
                             vm?.startIfNeededWhenWindowReady()
                         }
                     )
-                    .ignoresSafeArea()
+                    .modifier(PlayerWebViewSafeAreaLayout())
 
                     #if os(iOS)
                     // Keep WebKit visible for YouTube's player checks, but cover its
@@ -261,12 +271,11 @@ public struct TOSPlayerView: View {
 
                     #if os(macOS)
                     // MARK: Top-right control cluster — more menu (like/dislike, sleep
-                    // timer, share) + playback speed picker. See topRightControls for why
-                    // these are native Menus rather than ports of the standard player's
-                    // custom overlay views. On iOS both live in the back-button row
-                    // instead (see backButton()) — there's no on-screen back button here
-                    // to anchor them to on macOS.
+                    // timer, share) + playback speed picker. Restored alongside the
+                    // system navigation bar; positioned below the toolbar's safe area.
                     topRightControls(topInset: geo.safeAreaInsets.top, vm: vm)
+                        .opacity(isNativeFullScreen ? 0 : 1)
+                        .allowsHitTesting(!isNativeFullScreen)
                     #endif
 
                     #if os(iOS)
@@ -364,6 +373,32 @@ public struct TOSPlayerView: View {
             }
             .onAppear {
                 vm.updateSettings(store.settings)
+                #if os(macOS)
+                // The embed's own fullscreen button also toggles this window's native
+                // full screen (see macOSNativeFullscreenJS) so both paths match.
+                vm.onToggleFullscreen = { [weak vm] in
+                    (vm?.webView.window ?? NSApp.keyWindow)?.toggleFullScreen(nil)
+                }
+                // A double-click on the web player toggles this window's native
+                // full-screen mode. A local monitor is used because WKWebView's
+                // web content consumes mouse events before SwiftUI gestures run.
+                if doubleClickMonitor == nil {
+                    doubleClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+                        guard event.clickCount == 2,
+                            let window = event.window,
+                            let hitView = window.contentView?.hitTest(event.locationInWindow),
+                            hitView === vm.webView || hitView.isDescendant(of: vm.webView)
+                        else { return event }
+                        window.toggleFullScreen(nil)
+                        // Swallow the second click so the embed does not also handle it.
+                        return nil
+                    }
+                }
+                // Show the native controls initially, then re-show them on any mouse
+                // interaction with the player window.
+                // Let MainSidebarView collapse the sidebar while this player is up.
+                Notification.Name.postPlayerPresentation(true)
+                #endif
                 // #51/#78: without this, WatchtimeTracker's pings carry no auth
                 // header even for signed-in users, so playback through the TOS
                 // player (the iOS default since 4.6) never registers in YouTube's
@@ -413,6 +448,21 @@ public struct TOSPlayerView: View {
             // silently lost the watch position (resume-from-last-position and "continue
             // watching"/history never worked for TOS sessions — see WatchtimeTracker).
             .onDisappear {
+                #if os(macOS)
+                if let doubleClickMonitor { NSEvent.removeMonitor(doubleClickMonitor) }
+                doubleClickMonitor = nil
+                // Leaving the player while the window is still in native full screen
+                // (native toolbar back, Esc, …) would strand the browse UI full
+                // screen; leave full screen first. Skip the fatal-error fallback to
+                // the standard player, which keeps playing in the same window.
+                if vm.playerError?.isFatal != true,
+                    let window = vm.webView.window,
+                    window.styleMask.contains(.fullScreen)
+                {
+                    window.toggleFullScreen(nil)
+                }
+                Notification.Name.postPlayerPresentation(false)
+                #endif
                 #if os(iOS)
                 controlsHideTask?.cancel()
                 UIDevice.current.endGeneratingDeviceOrientationNotifications()
@@ -518,6 +568,10 @@ public struct TOSPlayerView: View {
                     title: Text(item.title), message: Text(item.message),
                     dismissButton: .default(Text("OK", bundle: L10n.bundle)))
             }
+            .modifier(
+                PlayerWebViewFullScreenReflow(webView: vm.webView, isFullScreen: $isNativeFullScreen)
+            )
+            .modifier(FullScreenToolbarHover())
         )
     }
 
@@ -641,18 +695,9 @@ public struct TOSPlayerView: View {
     }
     #endif
 
-    // MARK: - Top-right control cluster (speed + more)
-    //
-    // Both rendered as native macOS `Menu`s rather than the standard player's custom
-    // overlay+backdrop pickers / more-menu sheet: controls:1 leaves no "more menu"
-    // affordance to anchor a picker sheet from, and a Menu needs no new
-    // dismissal/animation/focus state of its own — it's the idiomatic macOS control
-    // for "pick one of a short list", and a `Menu`-of-`Menu`s is itself a minimal,
-    // zero-new-state stand-in for the "more menu" the architecture analysis flagged
-    // as a prerequisite for richer transfers (queue, captions, description, etc.) —
-    // this is the lightest possible version of that affordance, available today
-    // without waiting on the controls:0 fork.
-    #if os(macOS)
+    /// Top-right overlay cluster: more menu + playback speed. Kept as native
+    /// macOS `Menu`s; the system navigation bar carries navigation (back), while
+    /// these stay over the video so they work in full screen too.
     private func topRightControls(topInset: CGFloat, vm: TOSPlayerViewModel) -> some View {
         HStack(spacing: 8) {
             Spacer()
@@ -662,7 +707,6 @@ public struct TOSPlayerView: View {
         .padding(.top, max(topInset, 16))
         .padding(.trailing, 16)
     }
-    #endif
 
     /// Transferred from PlayerView+PickerOverlays.speedPickerOverlay — same source of
     /// truth (`AppSettings.availableSpeeds` / `store.settings.playbackSpeed`) and the
@@ -684,14 +728,20 @@ public struct TOSPlayerView: View {
                 }
             }
         } label: {
-            Text(speedLabel(for: store.settings.playbackSpeed))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 7)
-                .background(.ultraThinMaterial, in: Capsule())
+            HStack(spacing: 5) {
+                Text(speedLabel(for: store.settings.playbackSpeed))
+                    .font(.system(size: 13, weight: .semibold))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background(.ultraThinMaterial, in: Capsule())
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .tint(.white)
         .fixedSize()
         .accessibilityIdentifier("tosPlayer.speedButton")
         .accessibilityLabel(Text("Playback speed", bundle: L10n.bundle))
@@ -806,6 +856,8 @@ public struct TOSPlayerView: View {
                 .background(.ultraThinMaterial, in: Circle())
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .tint(.white)
         .fixedSize()
         .accessibilityIdentifier("tosPlayer.moreButton")
         .accessibilityLabel(Text("More", bundle: L10n.bundle))
@@ -969,6 +1021,98 @@ public struct TOSPlayerView: View {
         case .poiHighlight: return L10n.string("Skip to Highlight")
         }
     }
+}
+
+// MARK: - PlayerWebViewSafeAreaLayout
+
+/// The iOS player is a full-screen modal, so the web view bleeds edge to edge.
+/// On macOS the player window keeps a (transparent) titlebar with the traffic
+/// lights; keeping the web view inside the safe area starts YouTube's own top
+/// control row below those window buttons instead of underneath them.
+private struct PlayerWebViewSafeAreaLayout: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content.ignoresSafeArea()
+        #else
+        content
+        #endif
+    }
+}
+
+// MARK: - FullScreenToolbarHover
+
+/// Let macOS manage the navigation bar in full screen: hidden by default, shown
+/// again when the pointer reaches the top edge. This keeps both full-screen entry
+/// paths (double-click and the player's full-screen button) consistent.
+private struct FullScreenToolbarHover: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        if #available(macOS 15.0, *) {
+            content.windowToolbarFullScreenVisibility(.onHover)
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+// MARK: - PlayerWebViewFullScreenReflow
+
+/// WKWebView occasionally keeps its pre-full-screen size (video stuck in the
+/// bottom-left corner) after the window transitions, because its internal content
+/// view does not follow the SwiftUI hosting frame during the animation. Re-apply
+/// the hosting frame and force a layout pass once the transition has settled.
+/// Window chrome is left alone: the app uses the standard system toolbar, which
+/// macOS already auto-hides in full screen.
+private struct PlayerWebViewFullScreenReflow: ViewModifier {
+    let webView: WKWebView
+    @Binding var isFullScreen: Bool
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .onAppear {
+                DispatchQueue.main.async {
+                    isFullScreen = webView.window?.styleMask.contains(.fullScreen) ?? false
+                    reflow()
+                }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)
+            ) { note in
+                guard let window = note.object as? NSWindow, window === webView.window else { return }
+                isFullScreen = true
+                reflow()
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)
+            ) { note in
+                guard let window = note.object as? NSWindow, window === webView.window else { return }
+                isFullScreen = false
+                reflow()
+            }
+        #else
+        content
+        #endif
+    }
+
+    #if os(macOS)
+    private func reflow() {
+        let webView = self.webView
+        func apply() {
+            if let superview = webView.superview, superview.bounds.size != .zero {
+                webView.frame = superview.bounds
+            }
+            webView.needsLayout = true
+            webView.layoutSubtreeIfNeeded()
+        }
+        DispatchQueue.main.async(execute: apply)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: apply)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: apply)
+    }
+    #endif
 }
 
 // MARK: - YouTubeWebPlayerView (NSViewRepresentable)
