@@ -48,13 +48,18 @@ it without more RAM.
 ## Keychain authorization dialog during test runs
 
 SwiftPM test bundles are ad-hoc signed, so their code identity (a cdhash) changes on every
-build. A test that reads a Keychain item written by an earlier build therefore triggers the
-macOS authorization dialog, which blocks the whole run until someone clicks it. Agent
-sessions set `SMARTTUBE_KEYCHAIN=memory` (see `.claude/settings.json` `env`), which makes
-`TokenManager` use a process-local in-memory store instead of the real Keychain. That branch
-is `#if DEBUG` only, so release builds always use the real Keychain. For harnesses that do
-not read `.claude/settings.json`, set it on the command:
-`SMARTTUBE_KEYCHAIN=memory just test-unit`.
+build. Reading a Keychain item written by an earlier build used to trigger the macOS
+authorization dialog, which blocked the whole run until someone clicked it.
+
+Debug builds now never touch the real Keychain: `KeychainStoreFactory` returns an in-memory
+store in `#if DEBUG`, so tests and locally-run debug apps start signed out and never prompt.
+Release builds still use the real Keychain. Two consequences:
+
+- A debug run that needs persisted credentials must opt back in with
+  `SMARTTUBE_KEYCHAIN=keychain` (and will then ask for authorization). Don't use this in
+  agent sessions.
+- UI tests that need a signed-in UI use the app's `--uitesting-signed-in` launch argument or
+  a fake at the seam; the simulator's Keychain is irrelevant to them now.
 
 ## Known failure
 

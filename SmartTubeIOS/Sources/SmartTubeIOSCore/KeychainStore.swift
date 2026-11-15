@@ -1,5 +1,10 @@
 import Foundation
 import Security
+import os
+
+#if DEBUG
+private let keychainLog = Logger(subsystem: appSubsystem, category: "Keychain")
+#endif
 
 // MARK: - KeychainStoring
 //
@@ -90,15 +95,25 @@ final class InMemoryKeychainStore: KeychainStoring, @unchecked Sendable {
 #endif
 
 enum KeychainStoreFactory {
-    /// `SMARTTUBE_KEYCHAIN=memory` (debug builds only) keeps a process away from
-    /// the real Keychain, so agent-launched local runs never hit the
-    /// authorization dialog. Release builds compile this branch out entirely.
+    /// Debug builds default to the in-memory store: local runs must never trigger
+    /// the macOS Keychain authorization dialog. Test bundles are ad-hoc signed, so
+    /// their cdhash changes on every build and "Always Allow" never sticks; keeping
+    /// debug runs off the real Keychain removes the dialog entirely. Signed-out
+    /// state is enough for developing and testing.
+    ///
+    /// The real Keychain remains the Release behaviour. A debug run that genuinely
+    /// needs persisted credentials can opt back in with
+    /// `SMARTTUBE_KEYCHAIN=keychain` (it will then prompt for authorization).
     static func defaultStore() -> any KeychainStoring {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["SMARTTUBE_KEYCHAIN"] == "memory" {
-            return InMemoryKeychainStore()
+        if ProcessInfo.processInfo.environment["SMARTTUBE_KEYCHAIN"] == "keychain" {
+            keychainLog.notice("KeychainStore: using the real Keychain (SMARTTUBE_KEYCHAIN=keychain)")
+            return SecurityKeychainStore()
         }
-        #endif
+        keychainLog.notice("KeychainStore: using in-memory store (DEBUG default)")
+        return InMemoryKeychainStore()
+        #else
         return SecurityKeychainStore()
+        #endif
     }
 }

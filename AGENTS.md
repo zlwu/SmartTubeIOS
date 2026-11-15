@@ -9,7 +9,7 @@ Architecture map: docs/architecture.md · Glossary: CONTEXT.md · Decisions: doc
 ## Commands (always via `just`; run `just` to list)
 - `just ci` — secrets check + format check + lint + unit tests. Run before every commit.
 - `just build` / `just build-tvos` — simulator builds, no signing needed.
-- `just test-unit` / `just test-unit-filter <Name>` — Swift Testing package tests (no simulator). Agent sessions set `SMARTTUBE_KEYCHAIN=memory` (Claude Code: `.claude/settings.json` `env`) so local runs never reach the real Keychain and never block on its authorization dialog.
+- `just test-unit` / `just test-unit-filter <Name>` — Swift Testing package tests (no simulator). Debug builds use the in-memory Keychain store by default, so local runs never touch the real Keychain (see Gotchas).
 - `just test-smoke` — hermetic UI smoke plan. `just test-ui` — live UI plan (needs signed-in simulator; 3 workers max, see docs/how-to/run-tests.md).
 - `just format` — swift-format in place. `just lint` — SwiftLint against the committed baseline.
 
@@ -29,7 +29,8 @@ Architecture map: docs/architecture.md · Glossary: CONTEXT.md · Decisions: doc
 - Authenticated InnerTube calls use the TVHTML5 client on youtubei.googleapis.com with a Bearer token and no API key; the WEB client rejects Bearer tokens. Never call `/oauth2/v3/userinfo` for account info (the TV OAuth client isn't Data-API-v3-enabled) — use `account/accounts` with the TVHTML5 context instead.
 - The 16 GB build Mac stalls with > 3 parallel simulator clones; `just` hardcodes 3.
 - Playback fallback code (`PlaybackViewModel+Fallback.swift`) is under active decomposition (WS4). Do not add branches there; add a `StreamSource`.
-- `swift test` (and `just test-unit`) currently fails to build: `TOSPlayerView.swift`/`TOSPlayerViewModel+WebBridge.swift` have a native-macOS-only compile break (missing `onWindowReady` param, `NSImage.pngData()` doesn't exist) — pre-existing, tracked in `docs/modernization/workstreams/WS1-entry-point-and-gates.md` Discovered. Fix is WS4/WS5 scope.
+- **Debug builds never touch the real Keychain**: `KeychainStoreFactory` returns the in-memory store in `#if DEBUG`, so local runs and tests never hit the macOS authorization dialog (ad-hoc cdhash changes per build, so "Always Allow" could never stick). Debug runs therefore start signed out — use `--uitesting-signed-in` (or a fake at the seam) when a test needs a signed-in UI. Opt back into the real Keychain only if a debug run genuinely needs persisted credentials: `SMARTTUBE_KEYCHAIN=keychain`. Release always uses the real Keychain.
+- `just test-unit` runs serially (`swift test --no-parallel`): the tests wait for spawned tasks with fixed delays and share process-global state, so parallel runs flake (one suite even crashes on an empty array).
 
 ## Where things are
 - Playback: docs/architecture.md#playback · Tests how-to: docs/how-to/run-tests.md · Device logs: docs/how-to/device-logs.md
