@@ -299,6 +299,11 @@ final class TOSPlayerViewModel: NSObject {
 
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
+        // The embed's bottom-right fullscreen button calls requestFullscreen(), which
+        // WKWebView rejects unless element fullscreen is enabled (default: off) — so the
+        // button did nothing. The iframe already carries allowfullscreen; this is the
+        // other half of the pair.
+        config.preferences.isElementFullscreenEnabled = true
         #if os(iOS)
         // CRITICAL on iOS: without this, YouTube's embed hijacks the native system
         // video player when the user taps play, taking control away from the WKWebView.
