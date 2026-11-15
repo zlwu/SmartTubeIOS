@@ -9,7 +9,7 @@ Architecture map: docs/architecture.md · Glossary: CONTEXT.md · Decisions: doc
 ## Commands (always via `just`; run `just` to list)
 - `just ci` — secrets check + format check + lint + unit tests. Run before every commit.
 - `just build` / `just build-tvos` — simulator builds, no signing needed.
-- `just test-unit` / `just test-unit-filter <Name>` — Swift Testing package tests (no simulator).
+- `just test-unit` / `just test-unit-filter <Name>` — Swift Testing package tests (no simulator). Agent sessions set `SMARTTUBE_KEYCHAIN=memory` (Claude Code: `.claude/settings.json` `env`) so local runs never reach the real Keychain and never block on its authorization dialog.
 - `just test-smoke` — hermetic UI smoke plan. `just test-ui` — live UI plan (needs signed-in simulator; 3 workers max, see docs/how-to/run-tests.md).
 - `just format` — swift-format in place. `just lint` — SwiftLint against the committed baseline.
 

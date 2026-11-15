@@ -45,6 +45,7 @@ public actor TokenManager {
     private var pageId: String?
 
     private let service: String
+    private let store: any KeychainStoring
 
     // MARK: - Stream
 
@@ -62,8 +63,10 @@ public actor TokenManager {
 
     // MARK: - Init
 
-    public init(keychainService: String = "com.smarttube.auth") {
+    public init(keychainService: String = "com.smarttube.auth", store: (any KeychainStoring)? = nil) {
+        let resolvedStore = store ?? KeychainStoreFactory.defaultStore()
         service = keychainService
+        self.store = resolvedStore
 
         var cont: AsyncStream<Update>.Continuation!
         let stream = AsyncStream<Update> { cont = $0 }
@@ -71,18 +74,18 @@ public actor TokenManager {
         continuation = cont
 
         let snap = Snapshot(
-            accessToken: Self.kcGet(service: keychainService, key: "st_access_token"),
-            refreshToken: Self.kcGet(service: keychainService, key: "st_refresh_token"),
+            accessToken: resolvedStore.get(service: keychainService, key: "st_access_token"),
+            refreshToken: resolvedStore.get(service: keychainService, key: "st_refresh_token"),
             tokenExpiry: {
-                guard let s = Self.kcGet(service: keychainService, key: "st_token_expiry")
+                guard let s = resolvedStore.get(service: keychainService, key: "st_token_expiry")
                 else { return nil }
                 return ISO8601DateFormatter().date(from: s)
             }(),
-            accountName: Self.kcGet(service: keychainService, key: "st_account_name"),
-            accountAvatarURL: Self.kcGet(service: keychainService, key: "st_avatar_url")
+            accountName: resolvedStore.get(service: keychainService, key: "st_account_name"),
+            accountAvatarURL: resolvedStore.get(service: keychainService, key: "st_avatar_url")
                 .flatMap(URL.init(string:)),
-            sapisid: Self.kcGet(service: keychainService, key: "st_sapisid"),
-            pageId: Self.kcGet(service: keychainService, key: "st_page_id")
+            sapisid: resolvedStore.get(service: keychainService, key: "st_sapisid"),
+            pageId: resolvedStore.get(service: keychainService, key: "st_page_id")
         )
         initialSnapshot = snap
         accessToken = snap.accessToken
@@ -126,12 +129,12 @@ public actor TokenManager {
     /// is available on the next launch without requiring a fresh cookie exchange.
     public func setSAPISID(_ value: String?) {
         sapisid = value
-        Self.kcSet(service: service, key: "st_sapisid", value: value)
+        store.set(service: service, key: "st_sapisid", value: value)
     }
 
     public func setPageId(_ value: String?) {
         pageId = value
-        Self.kcSet(service: service, key: "st_page_id", value: value)
+        store.set(service: service, key: "st_page_id", value: value)
     }
 
     public func clearToken() {
@@ -150,11 +153,11 @@ public actor TokenManager {
 
     private func persistToKeychain() {
         let fmt = ISO8601DateFormatter()
-        Self.kcSet(service: service, key: "st_access_token", value: accessToken)
-        Self.kcSet(service: service, key: "st_refresh_token", value: refreshToken)
-        Self.kcSet(service: service, key: "st_token_expiry", value: tokenExpiry.map { fmt.string(from: $0) })
-        Self.kcSet(service: service, key: "st_account_name", value: accountName)
-        Self.kcSet(service: service, key: "st_avatar_url", value: accountAvatarURL?.absoluteString)
+        store.set(service: service, key: "st_access_token", value: accessToken)
+        store.set(service: service, key: "st_refresh_token", value: refreshToken)
+        store.set(service: service, key: "st_token_expiry", value: tokenExpiry.map { fmt.string(from: $0) })
+        store.set(service: service, key: "st_account_name", value: accountName)
+        store.set(service: service, key: "st_avatar_url", value: accountAvatarURL?.absoluteString)
     }
 
     private func deleteFromKeychain() {
@@ -162,52 +165,7 @@ public actor TokenManager {
             "st_access_token", "st_refresh_token", "st_token_expiry",
             "st_account_name", "st_avatar_url", "st_sapisid", "st_page_id",
         ] {
-            Self.kcDelete(service: service, key: key)
+            store.delete(service: service, key: key)
         }
-    }
-
-    // MARK: - Static (nonisolated) Keychain helpers
-    // Static methods are nonisolated — safe to call from actor init.
-
-    private static func kcGet(service: String, key: String) -> String? {
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: key,
-            kSecReturnData: true,
-            kSecMatchLimit: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-            let data = result as? Data
-        else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private static func kcSet(service: String, key: String, value: String?) {
-        let deleteQuery: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: key,
-        ]
-        SecItemDelete(deleteQuery as CFDictionary)
-        guard let value, let data = value.data(using: .utf8) else { return }
-        let addQuery: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: key,
-            kSecValueData: data,
-            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock,
-        ]
-        SecItemAdd(addQuery as CFDictionary, nil)
-    }
-
-    private static func kcDelete(service: String, key: String) {
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: key,
-        ]
-        SecItemDelete(query as CFDictionary)
     }
 }

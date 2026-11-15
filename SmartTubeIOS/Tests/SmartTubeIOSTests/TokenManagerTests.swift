@@ -19,7 +19,8 @@ struct TokenManagerTests {
     @Test("setToken persists all fields to Keychain across instances")
     func setTokenPersistsToKeychain() async throws {
         let service = "test-tm-\(UUID().uuidString)"
-        let tm = TokenManager(keychainService: service)
+        let store = InMemoryKeychainStore()
+        let tm = TokenManager(keychainService: service, store: store)
         let expiry = Date(timeIntervalSinceNow: 3600)
 
         await tm.setToken(
@@ -30,8 +31,8 @@ struct TokenManagerTests {
             avatarURL: URL(string: "https://example.com/avatar.jpg")
         )
 
-        // New instance reads from the same Keychain service
-        let tm2 = TokenManager(keychainService: service)
+        // New instance reads from the same store
+        let tm2 = TokenManager(keychainService: service, store: store)
         #expect(tm2.initialSnapshot.accessToken == "access-abc")
         #expect(tm2.initialSnapshot.refreshToken == "refresh-xyz")
         #expect(tm2.initialSnapshot.accountName == "Alice")
@@ -49,12 +50,13 @@ struct TokenManagerTests {
     @Test("clearToken removes all Keychain entries")
     func clearTokenRemovesFromKeychain() async throws {
         let service = "test-tm-clear-\(UUID().uuidString)"
-        let tm = TokenManager(keychainService: service)
+        let store = InMemoryKeychainStore()
+        let tm = TokenManager(keychainService: service, store: store)
 
         await tm.setToken(access: "tok", refresh: "ref", expiry: nil, accountName: "Bob", avatarURL: nil)
         await tm.clearToken()
 
-        let tm2 = TokenManager(keychainService: service)
+        let tm2 = TokenManager(keychainService: service, store: store)
         #expect(tm2.initialSnapshot.accessToken == nil)
         #expect(tm2.initialSnapshot.refreshToken == nil)
         #expect(tm2.initialSnapshot.accountName == nil)

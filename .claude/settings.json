@@ -1,4 +1,7 @@
 {
+  "env": {
+    "SMARTTUBE_KEYCHAIN": "memory"
+  },
   "hooks": {
     "PreToolUse": [
       { "matcher": "Edit|Write|MultiEdit",

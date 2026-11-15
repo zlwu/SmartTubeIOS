@@ -45,6 +45,17 @@ it without more RAM.
 - `just test-ui-one <SmartTubeUITests/Suite/testMethod>` — a single UI test.
 - Device/app log capture during a test run: `docs/how-to/device-logs.md`.
 
+## Keychain authorization dialog during test runs
+
+SwiftPM test bundles are ad-hoc signed, so their code identity (a cdhash) changes on every
+build. A test that reads a Keychain item written by an earlier build therefore triggers the
+macOS authorization dialog, which blocks the whole run until someone clicks it. Agent
+sessions set `SMARTTUBE_KEYCHAIN=memory` (see `.claude/settings.json` `env`), which makes
+`TokenManager` use a process-local in-memory store instead of the real Keychain. That branch
+is `#if DEBUG` only, so release builds always use the real Keychain. For harnesses that do
+not read `.claude/settings.json`, set it on the command:
+`SMARTTUBE_KEYCHAIN=memory just test-unit`.
+
 ## Known failure
 
 `just test-unit` currently fails to build (pre-existing, not test-writing-related) — see
