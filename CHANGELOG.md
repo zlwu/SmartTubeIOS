@@ -4,6 +4,13 @@ All notable changes to SmartTube are documented here.
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Self-drawn TOS player controls on macOS (experimental)** — the IFrame player can now draw its own control layer (top bar, bottom bar, scrubber with buffered underlay, keyboard shortcuts) instead of showing YouTube's embedded chrome, behind the new "Self-Drawn Player Controls" toggle under Settings → Experimental. Ads still play, so the embed's skip-ad button should be verified on device before relying on it (#1)
+
+---
+
 ## [4.5] – 2026-06-11
 
 ### Added

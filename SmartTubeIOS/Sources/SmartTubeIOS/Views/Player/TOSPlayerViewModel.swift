@@ -73,6 +73,33 @@ final class TOSPlayerViewModel: NSObject {
     var currentTime: Double = 0
     var duration: Double = 0
     var isReady: Bool = false
+    /// Whether the app draws its own control layer. When true (GitHub issue #1,
+    /// 彻底自绘播放器) `loadEmbed()` asks the embed for `controls=0` and the SwiftUI
+    /// controls in `TOSPlayerView` issue commands through the APIs below instead of
+    /// leaving playback to YouTube's own chrome. Default `false` keeps the historical
+    /// `controls=1` behavior (including on iOS) byte-for-byte until the view opts in.
+    ///
+    /// Read only by `loadEmbed()`, so it MUST be assigned before the load is triggered
+    /// — `TOSPlayerView` sets it in `onAppear`, ahead of
+    /// `startIfNeededWhenWindowReady()`'s delayed load.
+    var useNativeControls: Bool = false
+    /// End of the embed's last buffered range (`video.buffered.end(last)`), in seconds.
+    /// 0 until the JS bridge reports one. Drives the self-drawn scrubber's buffered
+    /// underlay via `TOSPlaybackTimeline.bufferedFraction(bufferedEnd:duration:)`.
+    var bufferedEnd: Double = 0
+    /// The embed's `video.volume`, 0...1. Polled by `stateDetectionJS` and pushed
+    /// back on every "ready"/"tick"/"stateChange" message; also set optimistically
+    /// by `setVolume(_:)` so the slider tracks the finger between polls.
+    var volume: Double = 1
+    /// The embed's `video.muted` flag. Owned by the self-drawn control layer
+    /// (`toggleMute()`), but also reflects JS-driven transitions the poll observes
+    /// (the muted-autoplay workaround, iOS background re-mute).
+    var isMuted: Bool = false
+    /// True while YouTube is serving an ad (`#movie_player.ad-showing` or the
+    /// surrounding `.html5-video-player.ad-showing`). The self-drawn controls hide
+    /// ad-irrelevant chrome and block seeking while set — see
+    /// `TOSPlaybackTimeline.canSeek(duration:isPlayingAd:)`.
+    var isPlayingAd: Bool = false
     /// Single in-flight history-session resolution; tick callbacks can arrive rapidly.
     var trackingSessionTask: Task<Void, Never>?
     /// Last time tracking-URL resolution came back empty; gates retries in
@@ -628,6 +655,120 @@ final class TOSPlayerViewModel: NSObject {
         )
     }
 
+    // MARK: - Self-drawn control APIs (GitHub issue #1)
+    //
+    // Commands issued by the app-drawn control layer when the embed is loaded with
+    // `controls=0` (see `useNativeControls`). Each one is a frame-targeted `eval()`
+    // into the YouTube embed iframe, exactly like play()/seekTo()/setPlaybackRate()
+    // above. The resulting state (volume/muted/buffered/ad) is pushed back by
+    // `stateDetectionJS` on the next poll — see TOSPlayerViewModel+WebBridge.swift.
+
+    /// Sets the embed's volume to `value` (clamped to `0...1`). Any value > 0 also
+    /// un-mutes, matching every native player's "raise the volume ⇒ become audible" rule.
+    ///
+    /// Prefers `#movie_player.setVolume()` over `video.volume`: YouTube's player keeps
+    /// its own internal volume/mute state and periodically re-applies it onto
+    /// `video.volume`, so a DOM-only write is reverted ~250ms later — the same root
+    /// cause documented in `stateDetectionJS`'s auto-unmute block.
+    func setVolume(_ value: Double) {
+        guard value.isFinite else { return }
+        let clamped = min(max(value, 0), 1)
+        let jsVolume = "\(clamped)"
+        // Optimistic update so the slider tracks the finger without waiting for the
+        // 250ms poll to round-trip; the next tick's `volume`/`muted` fields correct it.
+        volume = clamped
+        if clamped > 0 { isMuted = false }
+        eval(
+            "setVolume(\(jsVolume))",
+            """
+            (function(){
+                var video=document.querySelector('video');
+                var ifr=document.querySelectorAll('iframe').length;
+                var mp=document.getElementById('movie_player');
+                var via=null;
+                if(mp&&typeof mp.setVolume==='function'){mp.setVolume(\(jsVolume));via='movie_player.setVolume';}
+                else if(video){video.volume=\(jsVolume);via='video.volume';}
+                if(\(jsVolume)>0){
+                    if(video){video.muted=false;}
+                    if(mp&&typeof mp.unMute==='function'){mp.unMute();}
+                }
+                return {found: !!video, iframes: ifr, via: via,
+                        volume: video?video.volume:null, muted: video?video.muted:null};
+            })();
+            """
+        )
+        tosLog.notice("[controls] setVolume \(clamped, format: .fixed(precision: 2))")
+    }
+
+    /// Toggles the embed's mute state, updating `isMuted` optimistically. Uses
+    /// `#movie_player.mute()`/`unMute()` when available (same internal-state reason
+    /// as `setVolume`), falling back to `video.muted`. The bridge's next poll corrects
+    /// `isMuted` if YouTube disagreed.
+    func toggleMute() {
+        let targetMuted = !isMuted
+        let jsTarget = targetMuted ? "true" : "false"
+        isMuted = targetMuted
+        eval(
+            "toggleMute(muted: \(jsTarget))",
+            """
+            (function(){
+                var muted=\(jsTarget);
+                var video=document.querySelector('video');
+                var ifr=document.querySelectorAll('iframe').length;
+                var mp=document.getElementById('movie_player');
+                var via=null;
+                if(mp){
+                    if(muted&&typeof mp.mute==='function'){mp.mute();via='movie_player.mute';}
+                    else if(!muted&&typeof mp.unMute==='function'){mp.unMute();via='movie_player.unMute';}
+                }
+                if(!via&&video){video.muted=muted;via='video.muted';}
+                return {found: !!video, iframes: ifr, via: via, muted: video?video.muted:null};
+            })();
+            """
+        )
+        tosLog.notice("[controls] toggleMute → \(targetMuted, privacy: .public)")
+    }
+
+    /// Starts or stops playback from the self-drawn control layer.
+    ///
+    /// Deliberately does NOT reuse `pause()`: that method exists for *dismissal* and
+    /// calls `WKWebView.pauseAllMediaPlayback()` (an OS-level suspend of every frame)
+    /// plus posts the `pausedAllMedia` Darwin notification that UI tests gate dismissal
+    /// on. A mid-playback pause must stay inside the embed document, so this is a plain
+    /// frame-targeted `video.pause()` plus the same watch-position checkpoint
+    /// `pause()` performs.
+    func setPlaying(_ playing: Bool) {
+        if playing {
+            play()
+            return
+        }
+        let timeBefore = currentTime
+        let durationBefore = duration
+        Task {
+            guard !isIncognito, settings.historyState == .enabled, durationBefore > 0 else { return }
+            await self.ensureTrackingSession()
+            await self.tracker.checkpoint(position: timeBefore, duration: durationBefore)
+        }
+        eval(
+            "setPlaying(false)",
+            "(function(){var v=document.querySelector('video');var ifr=document.querySelectorAll('iframe').length;if(v&&!v.paused){v.pause();}return {found: !!v, iframes: ifr, paused: v ? v.paused : null};})();"
+        )
+        tosLog.notice("[controls] setPlaying(false) at t=\(timeBefore, format: .fixed(precision: 1))s")
+    }
+
+    /// Flips play/pause from the polled `playerState` — the tap/space action for the
+    /// self-drawn play/pause button. `.playing`/`.buffering` → pause; everything else
+    /// (paused/ended/unstarted/cued) → play, mirroring the standard player's
+    /// `PlaybackViewModel.togglePlayPause()`.
+    func togglePlayPause() {
+        switch playerState {
+        case .playing, .buffering:
+            setPlaying(false)
+        default:
+            setPlaying(true)
+        }
+    }
+
     // MARK: - Private helpers
 
     // FRAME-TARGETED EVAL (the fix for the cross-origin-iframe defect described on
@@ -748,7 +889,10 @@ final class TOSPlayerViewModel: NSObject {
         comps.queryItems = [
             URLQueryItem(name: "autoplay", value: "1"),
             URLQueryItem(name: "mute", value: "1"),
-            URLQueryItem(name: "controls", value: "1"),
+            // controls=0 hides YouTube's own chrome so the app-drawn control layer
+            // (GitHub issue #1) is the only UI; the default (useNativeControls=false)
+            // keeps controls=1, i.e. the historical embed behavior.
+            URLQueryItem(name: "controls", value: useNativeControls ? "0" : "1"),
             URLQueryItem(name: "playsinline", value: "1"),
             URLQueryItem(name: "rel", value: "0"),
             URLQueryItem(name: "iv_load_policy", value: "3"),
@@ -859,6 +1003,9 @@ final class TOSPlayerViewModel: NSObject {
             var _autoUnmuted = false;
             var _pausedCandidate = false;
             var _prevMuted = null;
+            // Last observed ad flag (null until the first poll seeds it), so an
+            // 'adChange' message fires exactly on the false↔true transition.
+            var _prevIsAd = null;
             // Set to true by visibilitychange when the page hides (app backgrounds).
             // Cleared when we detect a mute→true transition caused by the hide, so the
             // subsequent false→true mute is attributed to iOS, not to the user.
@@ -949,6 +1096,33 @@ final class TOSPlayerViewModel: NSObject {
             });
             _observer.observe(document.documentElement, {childList: true, subtree: true});
 
+            // Self-drawn control-layer telemetry (GitHub issue #1): buffered end,
+            // volume, mute, and ad detection. Computed once per poll and attached to
+            // the existing 'ready'/'tick'/'stateChange' payloads, so Swift receives
+            // them on messages it already consumes — no extra polling, no extra
+            // message types beyond the one-shot 'adChange' transition.
+            function detectAd(video) {
+                try {
+                    var mp = document.getElementById('movie_player');
+                    if (mp instanceof Element && mp.classList.contains('ad-showing')) return true;
+                    // Some ad layouts only mark the outer player container, not #movie_player.
+                    var container = (video instanceof Element) ? video.closest('.html5-video-player') : null;
+                    if (container instanceof Element && container.classList.contains('ad-showing')) return true;
+                } catch(e) {}
+                return false;
+            }
+
+            // End of the LAST buffered TimeRange, in seconds — 0 when nothing is
+            // buffered yet (or the ranges object is unavailable).
+            function bufferedEndOf(video) {
+                try {
+                    var b = video.buffered;
+                    if (!b || b.length === 0) return 0;
+                    var end = b.end(b.length - 1);
+                    return (typeof end === 'number' && isFinite(end)) ? end : 0;
+                } catch(e) { return 0; }
+            }
+
             function pollVideo() {
                 var video = document.querySelector('video');
                 if (!video) return;
@@ -980,10 +1154,22 @@ final class TOSPlayerViewModel: NSObject {
 
                 var t = video.currentTime || 0;
 
+                // Control-layer telemetry — attached to the ready/tick/stateChange
+                // payloads below and mirrored into TOSPlayerViewModel's @Observable
+                // properties by +WebBridge.swift.
+                var telemetry = {
+                    bufferedEnd: bufferedEndOf(video),
+                    volume: (typeof video.volume === 'number') ? video.volume : 1,
+                    muted: !!video.muted,
+                    isAd: detectAd(video)
+                };
+
                 if (_prevState === -2) {
                     _prevState = s;
                     postMsg({type: 'ready', duration: video.duration || 0,
-                             readyState: video.readyState, buffered: video.buffered.length});
+                             readyState: video.readyState, buffered: video.buffered.length,
+                             bufferedEnd: telemetry.bufferedEnd, volume: telemetry.volume,
+                             muted: telemetry.muted, isAd: telemetry.isAd});
                 }
 
                 // Kick off playback if YouTube's own autoplay didn't fire (common in WKWebView).
@@ -1051,11 +1237,33 @@ final class TOSPlayerViewModel: NSObject {
                     postMsg({type: 'pollUnmuted', t: t, retriesLeft: _bgRemutePollRetries, muted: video.muted});
                 }
 
-                postMsg({type: 'tick', t: t, state: s, duration: video.duration || 0});
+                // Refresh after the autoplay/mute handling above so the tick reports
+                // this poll's FINAL state, not the pre-nudge reading (e.g. the muted
+                // autoplay start or a bg-remute unmute applied a few lines up).
+                telemetry.bufferedEnd = bufferedEndOf(video);
+                telemetry.volume = (typeof video.volume === 'number') ? video.volume : 1;
+                telemetry.muted = !!video.muted;
+                telemetry.isAd = detectAd(video);
+
+                postMsg({type: 'tick', t: t, state: s, duration: video.duration || 0,
+                         bufferedEnd: telemetry.bufferedEnd, volume: telemetry.volume,
+                         muted: telemetry.muted, isAd: telemetry.isAd});
 
                 if (s !== _prevState) {
                     _prevState = s;
-                    postMsg({type: 'stateChange', state: s});
+                    postMsg({type: 'stateChange', state: s,
+                             bufferedEnd: telemetry.bufferedEnd, volume: telemetry.volume,
+                             muted: telemetry.muted, isAd: telemetry.isAd});
+                }
+
+                // One-shot ad transition — lets Swift react immediately (hide the
+                // scrubber, disable seeking) instead of inferring it from the poll's
+                // isAd field. Seeded silently on the first poll.
+                if (_prevIsAd === null) {
+                    _prevIsAd = telemetry.isAd;
+                } else if (telemetry.isAd !== _prevIsAd) {
+                    _prevIsAd = telemetry.isAd;
+                    postMsg({type: 'adChange', isAd: telemetry.isAd, t: t});
                 }
             }
 

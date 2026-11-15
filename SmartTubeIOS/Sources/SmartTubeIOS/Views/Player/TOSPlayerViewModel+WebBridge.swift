@@ -72,6 +72,7 @@ extension TOSPlayerViewModel {
                 )
             }
             isReady = true
+            applyPlaybackTelemetry(json)
             let readyDuration = (json["duration"] as? Double) ?? 0
             if readyDuration > 0 { setDurationIfNewlyKnown(readyDuration) }
             tosLog.notice("[ytCallback] ready — duration=\(self.duration, format: .fixed(precision: 1))s")
@@ -109,6 +110,7 @@ extension TOSPlayerViewModel {
         case "stateChange":
             let raw = (json["state"] as? Int) ?? 999
             playerState = YTPlayerState(raw: raw)
+            applyPlaybackTelemetry(json)
             tosLog.debug("[ytCallback] stateChange → \(raw)")
             #if os(iOS)
             updateNowPlayingPlayback()
@@ -127,6 +129,25 @@ extension TOSPlayerViewModel {
                 // the Autoplay/queue settings.
                 handlePlaybackEnd()
             }
+
+        case "adChange":
+            // One-shot transition from stateDetectionJS's ad detection
+            // (#movie_player / .html5-video-player carrying 'ad-showing'). The
+            // field is also mirrored on every tick's isAd, so this only exists to
+            // give UI tests and the self-drawn controls an edge trigger.
+            let isAd = (json["isAd"] as? Bool) ?? false
+            let adT = (json["t"] as? Double) ?? 0
+            isPlayingAd = isAd
+            tosLog.notice(
+                "[ytCallback] 📺 ad \(isAd ? "started" : "ended") at t=\(adT, format: .fixed(precision: 2))s"
+            )
+            let adNotificationName =
+                isAd ? "com.void.smarttube.tosplayer.adstarted" : "com.void.smarttube.tosplayer.adended"
+            CFNotificationCenterPostNotification(
+                CFNotificationCenterGetDarwinNotifyCenter(),
+                CFNotificationName(adNotificationName as CFString),
+                nil, nil, true
+            )
 
         case "autoUnmuted":
             // One-shot trace from stateDetectionJS's pollVideo: confirms the
@@ -188,6 +209,7 @@ extension TOSPlayerViewModel {
             let t = (json["t"] as? Double) ?? 0
             let s = (json["state"] as? Int) ?? 999
             currentTime = t
+            applyPlaybackTelemetry(json)
             // "ready" fires on the very first poll, before video.duration has
             // necessarily loaded (the video starts muted for autoplay-policy
             // reasons, so metadata can lag a poll or two) — confirmed live:
@@ -302,6 +324,28 @@ extension TOSPlayerViewModel {
 
         default:
             break
+        }
+    }
+
+    /// Applies the self-drawn control layer's telemetry fields (`bufferedEnd`,
+    /// `volume`, `muted`, `isAd`) carried by the "ready"/"tick"/"stateChange"
+    /// payloads — see `stateDetectionJS`'s `telemetry` object in
+    /// TOSPlayerViewModel.swift. Each field is optional so an older injected script
+    /// (or a payload that omitted it) leaves the current value untouched rather than
+    /// resetting it. The values are clamped to their valid ranges, so a hostile/broken
+    /// page can't drive the control layer's slider out of bounds.
+    private func applyPlaybackTelemetry(_ json: [String: Any]) {
+        if let bufferedEnd = json["bufferedEnd"] as? Double, bufferedEnd.isFinite {
+            self.bufferedEnd = max(0, bufferedEnd)
+        }
+        if let volume = json["volume"] as? Double, volume.isFinite {
+            self.volume = min(max(volume, 0), 1)
+        }
+        if let muted = json["muted"] as? Bool {
+            self.isMuted = muted
+        }
+        if let isAd = json["isAd"] as? Bool {
+            self.isPlayingAd = isAd
         }
     }
 

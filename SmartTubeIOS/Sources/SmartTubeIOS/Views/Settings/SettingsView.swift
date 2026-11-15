@@ -441,13 +441,22 @@ public struct SettingsView: View {
         return Section {
             Toggle(L10n.string("IFrame Player (TOS-compliant, shows ads)"), isOn: $store.settings.useTOSPlayerOnMac)
                 .accessibilityIdentifier("settings.useTOSPlayerOnMacToggle")
+            Toggle(L10n.string("Self-Drawn Player Controls"), isOn: $store.settings.useCustomTOSControlsOnMac)
+                .accessibilityIdentifier(AccessibilityID.Settings.useCustomTOSControlsOnMacToggle)
+                .disabled(!store.settings.useTOSPlayerOnMac)
         } header: {
             Text("Experimental", bundle: L10n.bundle)
         } footer: {
-            Text(
-                "Uses YouTube's official embedded player instead of the direct stream pipeline. Quality selection is unavailable. Ads will play. Useful for videos that refuse to play via the standard path.",
-                bundle: L10n.bundle
-            )
+            VStack(alignment: .leading, spacing: 6) {
+                Text(
+                    "Uses YouTube's official embedded player instead of the direct stream pipeline. Quality selection is unavailable. Ads will play. Useful for videos that refuse to play via the standard path.",
+                    bundle: L10n.bundle
+                )
+                Text(
+                    "Draw the player controls in-app instead of showing YouTube's embedded controls. Ads still play; verify the skip-ad button on device before relying on it.",
+                    bundle: L10n.bundle
+                )
+            }
         }
     }
     #endif
