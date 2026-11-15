@@ -76,12 +76,14 @@ public struct TOSPlayerView: View {
     @State private var showChaptersSheet = false
     /// Feedback alert for "Report Incorrect Segment" (#67) on either SponsorBlock toast.
     @State private var reportSegmentAlert: DownloadAlertItem?
+    /// Native window full-screen state: the top-right overlay controls are hidden in
+    /// full screen, where YouTube's own top-right controls already occupy that spot.
+    /// Declared on every platform because `PlayerWebViewFullScreenReflow` (a no-op
+    /// outside macOS) takes its binding unconditionally.
+    @State private var isNativeFullScreen = false
     #if os(macOS)
     /// Local mouse monitor used to detect a real double-click on the web player.
     @State private var doubleClickMonitor: Any?
-    /// Native window full-screen state: the top-right overlay controls are hidden in
-    /// full screen, where YouTube's own top-right controls already occupy that spot.
-    @State private var isNativeFullScreen = false
     #endif
 
     #if os(iOS)
