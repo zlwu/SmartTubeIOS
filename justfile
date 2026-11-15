@@ -47,8 +47,10 @@ build-tvos:
 macos-package:
     {{root}}/scripts/package-macos.sh
 
+# Serial: unit tests wait for spawned tasks with fixed delays and share process-global
+# state, so `--parallel` made runs flaky (and one suite crashed on an empty array).
 test-unit:
-    cd {{package}} && swift test --parallel 2>&1 | tail -30
+    cd {{package}} && swift test --no-parallel 2>&1 | tail -30
 
 # filter: `just test-unit-filter HLSManifestParserTests`
 test-unit-filter name:

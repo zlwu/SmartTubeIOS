@@ -24,11 +24,17 @@ struct VideoModelTests {
     }
 
     @Test func formattedViewCountThousands() {
+        // Localized output; pin the language so the host locale doesn't decide.
+        L10n.language = .english
+        defer { L10n.language = .system }
         let video = Video(id: "v", title: "T", channelTitle: "C", viewCount: 1_500)
         #expect(video.formattedViewCount == "1.5K views")
     }
 
     @Test func formattedViewCountMillions() {
+        // Localized output; pin the language so the host locale doesn't decide.
+        L10n.language = .english
+        defer { L10n.language = .system }
         let video = Video(id: "v", title: "T", channelTitle: "C", viewCount: 2_000_000)
         #expect(video.formattedViewCount == "2.0M views")
     }

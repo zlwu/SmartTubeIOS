@@ -241,8 +241,10 @@ enum ShortsEmbedJS {
         })();
         """
 
-    /// Builds `https://www.youtube.com/embed/{videoId}?...` — mirrors
-    /// `TOSPlayerViewModel.loadEmbed`'s query items (TOSPlayerViewModel.swift:405-416).
+    /// Builds `https://www.youtube.com/embed/{videoId}?...`. Matches
+    /// `TOSPlayerViewModel.loadEmbed`'s query items except `controls=0`: the
+    /// Shorts embed hides YouTube's native chrome and the app draws its own
+    /// pause indicator.
     static func embedURL(videoId: String, startTime: Double = 0) -> URL {
         var comps = URLComponents(string: "https://www.youtube.com/embed/\(videoId)")!
         comps.queryItems = [

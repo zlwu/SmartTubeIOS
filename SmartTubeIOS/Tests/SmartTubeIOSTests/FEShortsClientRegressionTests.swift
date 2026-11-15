@@ -5,18 +5,18 @@ import Testing
 
 // MARK: - FEShortsClientRegressionTests
 //
-// Regression tests for task #96: fetchShorts and fetchShortsMore must use the
-// TVHTML5 client context, not the WEB client context, when making authenticated
-// InnerTube browse requests.
+// Regression tests for task #96: a device-code OAuth token is bound to TVHTML5.
+// Sending it with a WEB client body makes YouTube return HTTP 400, so any WEB
+// request must stay unauthenticated; continuation tokens must be replayed with
+// the client that issued them.
 //
-// Root cause: the device-code OAuth token is bound to TVHTML5. When the WEB
-// client body is sent with this token, YouTube returns HTTP 400. All other auth
-// endpoints correctly use tvClientContext; fetchShorts and fetchShortsMore had
-// a regression that switched them to webClientContext, causing Shorts to show
-// no videos on cold launch.
+// History: fetchShorts used to fetch the FEshorts browse with the TVHTML5 client.
+// YouTube deprecated FEshorts, so it now searches "#shorts" through the
+// unauthenticated WEB path. The first test below covers that current shape (WEB
+// body, no Authorization header); the second still covers the TV continuation path.
 //
-// These tests intercept the outgoing URLRequest via URLProtocol and verify the
-// JSON body contains `"clientName": "TVHTML5"` — not `"WEB"`.
+// These tests intercept the outgoing URLRequest via URLProtocol and inspect the
+// captured JSON body and Authorization header.
 
 // MARK: - URLProtocol helper
 
@@ -25,6 +25,7 @@ import Testing
 private final class BodyCapturingURLProtocol: URLProtocol, @unchecked Sendable {
 
     nonisolated(unsafe) static var capturedBody: Data?
+    nonisolated(unsafe) static var capturedAuthorizationHeader: String?
 
     override class func canInit(with request: URLRequest) -> Bool {
         request.httpMethod == "POST"
@@ -35,9 +36,13 @@ private final class BodyCapturingURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         // URLSession converts httpBody to httpBodyStream before handing the request
         // to URLProtocol; httpBody is always nil here.
-        // Only capture the FIRST request — fetchShorts falls back to a second search
-        // request when the primary browse fails, and we must not let it overwrite
-        // the FEshorts browse body we already captured.
+        // Only capture the FIRST request — legacy fetchShortsMore tokens retry
+        // across several clients, and the first request already establishes the
+        // shape each test guards.
+        if BodyCapturingURLProtocol.capturedAuthorizationHeader == nil {
+            BodyCapturingURLProtocol.capturedAuthorizationHeader =
+                request.value(forHTTPHeaderField: "Authorization")
+        }
         if BodyCapturingURLProtocol.capturedBody == nil {
             if let stream = request.httpBodyStream {
                 stream.open()
@@ -79,7 +84,7 @@ private final class BodyCapturingURLProtocol: URLProtocol, @unchecked Sendable {
 
 // MARK: - Tests
 
-@Suite("FEshorts uses TV client — Regression #96", .serialized)
+@Suite("Shorts clients — Regression #96", .serialized)
 struct FEShortsClientRegressionTests {
 
     // MARK: - Helpers
@@ -95,13 +100,13 @@ struct FEShortsClientRegressionTests {
 
     // MARK: - fetchShorts
 
-    /// Verifies that fetchShorts sends `clientName: "TVHTML5"` when authenticated.
-    ///
-    /// Before the fix, this was `"WEB"`, causing YouTube to reject the request
-    /// with HTTP 400 because the device-code OAuth token is bound to TVHTML5.
-    @Test("fetchShorts sends TVHTML5 clientName when authenticated")
-    func fetchShortsSendsTVClientWhenAuthenticated() async throws {
+    /// Verifies the current fetchShorts shape: an unauthenticated "#shorts" search
+    /// through the WEB client. Sending the TV device-code Bearer token with a WEB
+    /// body is what made authenticated Shorts return HTTP 400 in the #96 regression.
+    @Test("fetchShorts sends an unauthenticated WEB search request")
+    func fetchShortsSendsUnauthenticatedWebSearch() async throws {
         BodyCapturingURLProtocol.capturedBody = nil
+        BodyCapturingURLProtocol.capturedAuthorizationHeader = nil
         let api = makeTestAPI(authToken: "fake-tv-oauth-token")
 
         // The call will throw (HTTP 400 from BodyCapturingURLProtocol), which is expected.
@@ -119,12 +124,14 @@ struct FEShortsClientRegressionTests {
         let context = json["context"] as? [String: Any]
         let clientDict = context?["client"] as? [String: Any]
 
+        #expect(clientDict?["clientName"] as? String == "WEB")
+        #expect(json["query"] as? String == "#shorts")
         #expect(
-            clientDict?["clientName"] as? String == "TVHTML5",
+            BodyCapturingURLProtocol.capturedAuthorizationHeader == nil,
             """
-            fetchShorts must use TVHTML5 client when authenticated.
-            Sending a device-code OAuth token with clientName="WEB" returns HTTP 400.
-            Found clientName=\(String(describing: clientDict?["clientName"]))
+            fetchShorts must not send the device-code OAuth token with a WEB client body.
+            Sending it returns HTTP 400 (regression #96).
+            Found Authorization=\(String(describing: BodyCapturingURLProtocol.capturedAuthorizationHeader))
             """
         )
     }
