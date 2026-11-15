@@ -43,6 +43,24 @@ func videoGridColumns(_ settings: AppSettings, landscape: Bool) -> [GridItem] {
 }
 #endif
 
+// MARK: - Player presentation (macOS)
+
+extension Notification.Name {
+    /// Posted by a player view when it appears/disappears so `MainSidebarView` can
+    /// collapse the sidebar while video is playing and restore it afterwards. The
+    /// player itself stays inside the split view's detail column — the sidebar is
+    /// only hidden and relaid out, never covered by an overlay.
+    static let playerPresentationDidChange = Notification.Name(
+        "com.smarttube.playerPresentationDidChange")
+
+    /// Convenience poster for the notification above.
+    static func postPlayerPresentation(_ isPresented: Bool) {
+        NotificationCenter.default.post(
+            name: .playerPresentationDidChange, object: nil,
+            userInfo: ["isPresented": isPresented])
+    }
+}
+
 // MARK: - Layout orientation
 
 private struct IsLandscapeLayoutKey: EnvironmentKey {

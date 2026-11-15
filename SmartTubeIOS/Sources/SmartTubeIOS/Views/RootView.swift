@@ -405,6 +405,15 @@ struct MainSidebarView: View {
     @State private var searchVM = SearchViewModel()
 
     @State private var selectedSection: AppSection? = .home
+    /// Sidebar column visibility. Collapsed to `.detailOnly` while the full-window
+    /// player overlay is up so playback uses the whole window (and the sidebar is
+    /// restored to whatever it was when the player closes).
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var columnVisibilityBeforePlayer: NavigationSplitViewVisibility?
+    /// Number of player views currently on screen. A fallback transition can briefly
+    /// overlap two players, so counting keeps the sidebar collapsed until the last
+    /// one goes away.
+    @State private var presentedPlayerCount = 0
     /// Set when the IFrame player hits a fatal embed error on the current video so we
     /// drop through to the standard PlayerView for that video only. Cleared when the
     /// video changes.
@@ -413,7 +422,7 @@ struct MainSidebarView: View {
     var body: some View {
         @Bindable var browseVM = browseVM
         ZStack {
-            NavigationSplitView {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
                 List(AppSection.allCases, selection: $selectedSection) { section in
                     Label(section.title, systemImage: section.icon)
                         .tag(section)
@@ -436,45 +445,16 @@ struct MainSidebarView: View {
                     .padding(.bottom, 8)
                 }
             } detail: {
-                NavigationStack { (selectedSection ?? .home).destination(api: api) }
+                // Player stays inside the detail column: expanding the sidebar
+                // relayouts the player beside it instead of the player covering it.
+                ZStack {
+                    NavigationStack { (selectedSection ?? .home).destination(api: api) }
+                    playerOverlay
+                }
             }
             .environment(searchVM)
             .onReceive(NotificationCenter.default.publisher(for: .activeChannelDidChange)) { _ in
                 selectedSection = .home
-            }
-
-            // Full-window player overlay — avoids macOS sheet coordinate issues that
-            // prevent XCUITest click events from reaching controls inside a popover window.
-            if let video = browseVM.deepLinkedVideo {
-                #if os(macOS)
-                let shouldUseTOS =
-                    store.settings.useTOSPlayerOnMac
-                    && tosPlayerFallbackVideoId != video.id
-                if shouldUseTOS {
-                    // TOS-compliant IFrame player experiment (macOS only, opt-in).
-                    // Falls back to the standard PlayerView on embedding-disabled videos.
-                    TOSPlayerView(video: video, api: api) {
-                        // Mark this video ID so the guard above drops to PlayerView.
-                        tosPlayerFallbackVideoId = video.id
-                    }
-                    .environment(store)
-                    .environment(auth)
-                    .environment(browseVM)
-                    .ignoresSafeArea()
-                } else {
-                    PlayerView(video: video, api: api)
-                        .environment(store)
-                        .environment(auth)
-                        .environment(browseVM)
-                        .ignoresSafeArea()
-                }
-                #else
-                PlayerView(video: video, api: api)
-                    .environment(store)
-                    .environment(auth)
-                    .environment(browseVM)
-                    .ignoresSafeArea()
-                #endif
             }
         }
         // When a different video is opened, clear the per-video fallback guard so
@@ -483,6 +463,62 @@ struct MainSidebarView: View {
             if newId != tosPlayerFallbackVideoId {
                 tosPlayerFallbackVideoId = nil
             }
+        }
+        // Players tell us when they appear/disappear so the sidebar is only hidden
+        // while video is actually playing. The player stays inside the split view's
+        // detail column, so expanding the sidebar relayouts it instead of the video
+        // covering the sidebar.
+        .onReceive(NotificationCenter.default.publisher(for: .playerPresentationDidChange)) { note in
+            guard let isPresented = note.userInfo?["isPresented"] as? Bool else { return }
+            presentedPlayerCount = max(0, presentedPlayerCount + (isPresented ? 1 : -1))
+            withAnimation(.easeInOut(duration: 0.2)) {
+                if presentedPlayerCount > 0 {
+                    if columnVisibilityBeforePlayer == nil {
+                        columnVisibilityBeforePlayer = columnVisibility
+                        columnVisibility = .detailOnly
+                    }
+                } else {
+                    columnVisibility = columnVisibilityBeforePlayer ?? .all
+                    columnVisibilityBeforePlayer = nil
+                }
+            }
+        }
+    }
+
+    /// Full-window (detail-column) player presented for deep links. Kept inside the
+    /// NavigationSplitView detail so the sidebar can never end up behind it.
+    @ViewBuilder
+    private var playerOverlay: some View {
+        if let video = browseVM.deepLinkedVideo {
+            #if os(macOS)
+            let shouldUseTOS =
+                store.settings.useTOSPlayerOnMac
+                && tosPlayerFallbackVideoId != video.id
+            if shouldUseTOS {
+                // TOS-compliant IFrame player experiment (macOS only, opt-in).
+                // Falls back to the standard PlayerView on embedding-disabled videos.
+                TOSPlayerView(video: video, api: api) {
+                    // Mark this video ID so the guard above drops to PlayerView.
+                    tosPlayerFallbackVideoId = video.id
+                }
+                .environment(store)
+                .environment(auth)
+                .environment(browseVM)
+                .ignoresSafeArea()
+            } else {
+                PlayerView(video: video, api: api)
+                    .environment(store)
+                    .environment(auth)
+                    .environment(browseVM)
+                    .ignoresSafeArea()
+            }
+            #else
+            PlayerView(video: video, api: api)
+                .environment(store)
+                .environment(auth)
+                .environment(browseVM)
+                .ignoresSafeArea()
+            #endif
         }
     }
 }

@@ -84,6 +84,12 @@ final class TOSPlayerViewModel: NSObject {
     /// even when YouTube's own chrome has auto-hidden between surface taps.
     var surfaceTapRevision = 0
     var surfaceTapControlsVisible = false
+    #if os(macOS)
+    /// Invoked when the embed asks for fullscreen (its bottom-right fullscreen
+    /// button). Routed to the native window fullscreen so the app's own player
+    /// controls stay available — see `macOSNativeFullscreenJS`.
+    var onToggleFullscreen: (() -> Void)?
+    #endif
 
     // MARK: - SponsorBlock
 
@@ -333,6 +339,16 @@ final class TOSPlayerViewModel: NSObject {
         )
         contentController.addUserScript(webkitHiderScript)
 
+        #if os(macOS)
+        contentController.addUserScript(
+            WKUserScript(
+                source: Self.macOSNativeFullscreenJS,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false,
+                in: .page
+            ))
+        #endif
+
         #if os(iOS)
         contentController.addUserScript(
             WKUserScript(
@@ -356,7 +372,11 @@ final class TOSPlayerViewModel: NSObject {
 
         config.userContentController = contentController
 
+        #if os(macOS)
+        self.webView = TOSPlayerWebView(frame: .zero, configuration: config)
+        #else
         self.webView = WKWebView(frame: .zero, configuration: config)
+        #endif
         // Use a TV User-Agent so YouTube serves the TV player variant of the
         // embed (vs. the web variant). The TV variant runs the YouTube TV
         // API for its player-config check, which authenticates against the
@@ -796,6 +816,34 @@ final class TOSPlayerViewModel: NSObject {
         })();
         """
 
+    #if os(macOS)
+    /// Injected into every frame at document-start. The embed's bottom-right
+    /// fullscreen button calls `requestFullscreen()`, which WebKit serves by opening
+    /// its own full-screen window — a *second* fullscreen mode that hides the app's
+    /// back/speed/more controls. Intercept the request and ask the native side to
+    /// toggle the hosting window's full screen instead, so both the button and the
+    /// double-click gesture use the same mode.
+    private static let macOSNativeFullscreenJS: String = """
+        (function() {
+            function requestNativeFullscreen() {
+                var callback = window.__nativeYTCallback;
+                if (callback) callback.postMessage(JSON.stringify({type: 'toggleFullscreen'}));
+            }
+            function patch(proto, name) {
+                if (!proto || !proto[name]) return;
+                proto[name] = function() {
+                    requestNativeFullscreen();
+                    return Promise.resolve();
+                };
+            }
+            patch(Element.prototype, 'requestFullscreen');
+            patch(Element.prototype, 'webkitRequestFullscreen');
+            patch(HTMLVideoElement.prototype, 'webkitEnterFullscreen');
+            patch(HTMLVideoElement.prototype, 'webkitEnterFullScreen');
+        })();
+        """
+    #endif
+
     /// JavaScript injected at document-end into the YouTube embed page.
     /// Polls the `<video>` element and relays state via window.__nativeYTCallback
     /// (saved by webkitHiderJS before window.webkit was hidden).
@@ -1143,5 +1191,20 @@ private final class ScriptMessageProxy: NSObject, WKScriptMessageHandler, @unche
         }
     }
 }
+
+#if os(macOS)
+/// WKWebView that reports zero safe-area insets.
+///
+/// The macOS TOS player intentionally fills the whole window (see
+/// `TOSPlayerView.body`, where the web-view layer calls `.ignoresSafeArea()`), but
+/// WKWebView still inherits the window's titlebar/toolbar safe area (52 pt) and
+/// insets its page viewport by that amount. The embedded player then lays the
+/// video out inside a 52 pt-shorter viewport, so it renders off-centre with a
+/// titlebar-height band above it. Our own controls already account for the OS
+/// chrome separately, so the web content must not repeat that inset.
+private final class TOSPlayerWebView: WKWebView {
+    override var safeAreaInsets: NSEdgeInsets { NSEdgeInsetsZero }
+}
+#endif
 
 #endif  // !os(tvOS)
