@@ -1203,6 +1203,33 @@ private struct PlayerWindowChromeHiding: ViewModifier {
             .onAppear { applyWindowChrome() }
             .onChange(of: isEnabled) { _, _ in applyWindowChrome() }
             .onDisappear { restoreWindowChrome() }
+            // Opening a SwiftUI Menu (speed / more) makes AppKit/SwiftUI re-install
+            // the window toolbar in some states — re-assert right when menu tracking
+            // or key-window changes happen, and keep a cheap periodic guard for the
+            // paths that don't post a notification. Without this the system
+            // navigation bar pops back the moment the user opens the speed menu.
+            .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { _ in
+                reassertWindowChrome()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { _ in
+                reassertWindowChrome()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+                guard (note.object as? NSWindow) === webView.window else { return }
+                reassertWindowChrome()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didUpdateNotification)) { note in
+                guard (note.object as? NSWindow) === webView.window else { return }
+                reassertWindowChrome()
+            }
+            .task(id: isEnabled) {
+                guard isEnabled else { return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    if Task.isCancelled { return }
+                    reassertWindowChrome()
+                }
+            }
         #else
         content
         #endif
@@ -1232,6 +1259,20 @@ private struct PlayerWindowChromeHiding: ViewModifier {
                 )
             }
         }
+    }
+
+    /// Puts the window chrome back into its hidden state if AppKit/SwiftUI restored
+    /// it (e.g. after a menu opens, or when the window becomes key again).
+    private func reassertWindowChrome() {
+        guard isEnabled, didStash, let window = webView.window else { return }
+        let chromeRestored =
+            window.toolbar != nil || window.titleVisibility != .hidden || !window.titlebarAppearsTransparent
+        guard chromeRestored else { return }
+        window.toolbar = nil
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        reflowWebView()
+        tosViewLog.notice("[playermac] re-hid window chrome after it was restored")
     }
 
     private func restoreWindowChrome() {
