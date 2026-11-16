@@ -602,6 +602,7 @@ public struct TOSPlayerView: View {
                 PlayerWebViewFullScreenReflow(webView: vm.webView, isFullScreen: $isNativeFullScreen)
             )
             .modifier(FullScreenToolbarHover())
+            .modifier(PlayerWindowChromeHiding(webView: vm.webView, isEnabled: vm.useNativeControls))
         )
     }
 
@@ -1171,6 +1172,94 @@ private struct FullScreenToolbarHover: ViewModifier {
         content
         #endif
     }
+}
+
+// MARK: - PlayerWindowChromeHiding
+
+/// GitHub issue #1: while the self-drawn control layer owns the player, macOS shows
+/// no system navigation bar at all. In full screen the toolbar is detached from the
+/// window; in *windowed* playback the titlebar title and the toolbar are hidden too
+/// and the content is allowed to extend behind the traffic lights (the traffic lights
+/// themselves stay — the in-app close button is the player's own affordance, and they
+/// are what makes the window draggable). Everything is restored when the player
+/// closes or the experiment is switched off.
+///
+/// This replaces the old "hide the toolbar only while full screen" behaviour: with the
+/// setting on, the player is chrome-free in both modes.
+private struct PlayerWindowChromeHiding: ViewModifier {
+    let webView: WKWebView
+    let isEnabled: Bool
+
+    #if os(macOS)
+    @State private var stashedToolbar: NSToolbar?
+    @State private var stashedTitleVisibility: NSWindow.TitleVisibility = .visible
+    @State private var stashedTitlebarTransparent = false
+    @State private var didStash = false
+    #endif
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .onAppear { applyWindowChrome() }
+            .onChange(of: isEnabled) { _, _ in applyWindowChrome() }
+            .onDisappear { restoreWindowChrome() }
+        #else
+        content
+        #endif
+    }
+
+    #if os(macOS)
+    private func applyWindowChrome() {
+        DispatchQueue.main.async {
+            guard isEnabled, let window = webView.window else {
+                restoreWindowChrome()
+                return
+            }
+            let isFirstApply = !didStash
+            if isFirstApply {
+                stashedToolbar = window.toolbar
+                stashedTitleVisibility = window.titleVisibility
+                stashedTitlebarTransparent = window.titlebarAppearsTransparent
+                didStash = true
+            }
+            window.toolbar = nil
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            reflowWebView()
+            if isFirstApply {
+                tosViewLog.notice(
+                    "[playermac] hid window chrome for self-drawn controls (fullScreen=\(window.styleMask.contains(.fullScreen), privacy: .public))"
+                )
+            }
+        }
+    }
+
+    private func restoreWindowChrome() {
+        guard didStash, let window = webView.window else { return }
+        window.toolbar = stashedToolbar
+        stashedToolbar?.isVisible = true
+        window.titleVisibility = stashedTitleVisibility
+        window.titlebarAppearsTransparent = stashedTitlebarTransparent
+        didStash = false
+        reflowWebView()
+        tosViewLog.notice("[playermac] restored window chrome")
+    }
+
+    /// The window's toolbar/titlebar change can leave WKWebView at its previous size
+    /// (black band). Re-apply the hosting frame once the transition settles.
+    private func reflowWebView() {
+        let webView = self.webView
+        func apply() {
+            if let superview = webView.superview, superview.bounds.size != .zero {
+                webView.frame = superview.bounds
+            }
+            webView.needsLayout = true
+            webView.layoutSubtreeIfNeeded()
+        }
+        DispatchQueue.main.async(execute: apply)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: apply)
+    }
+    #endif
 }
 
 // MARK: - PlayerWebViewFullScreenReflow

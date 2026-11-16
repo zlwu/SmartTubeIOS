@@ -219,28 +219,10 @@ public struct TOSPlayerControlsOverlay: View {
 
             Spacer(minLength: 12)
 
+            // Full screen lives only in the bottom bar — a second button up here was
+            // redundant (and the top-right corner belongs to the speed/more menus).
             speedMenu
             moreMenu
-
-            Button {
-                tosControlsOverlayLog.notice("[controls] fullscreen tapped")
-                actions.onToggleFullscreen()
-            } label: {
-                Image(
-                    systemName: model.isFullScreen
-                        ? "arrow.down.right.and.arrow.up.left"
-                        : "arrow.up.left.and.arrow.down.right"
-                )
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(8)
-                .background(.black.opacity(0.35), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier(AccessibilityID.TOSPlayerControls.fullscreenButton)
-            .accessibilityLabel(
-                Text(model.isFullScreen ? "Exit Full Screen" : "Enter Full Screen", bundle: L10n.bundle)
-            )
         }
         .padding(.horizontal, 20)
         .padding(.top, topInset + 10)
@@ -278,8 +260,10 @@ public struct TOSPlayerControlsOverlay: View {
             .padding(.vertical, 6)
             .background(.black.opacity(0.35), in: Capsule())
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .menuIndicator(.hidden)
+        .tint(.white)
         .fixedSize()
         .accessibilityIdentifier(AccessibilityID.TOSPlayerControls.speedButton)
         .accessibilityLabel(Text("Playback Speed", bundle: L10n.bundle))
@@ -295,8 +279,10 @@ public struct TOSPlayerControlsOverlay: View {
                 .padding(8)
                 .background(.black.opacity(0.35), in: Circle())
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .menuIndicator(.hidden)
+        .tint(.white)
         .fixedSize()
         .accessibilityIdentifier(AccessibilityID.TOSPlayerControls.moreButton)
         .accessibilityLabel(Text("More", bundle: L10n.bundle))
