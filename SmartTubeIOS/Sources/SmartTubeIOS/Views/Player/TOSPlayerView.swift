@@ -281,7 +281,8 @@ public struct TOSPlayerView: View {
                     if vm.useNativeControls {
                         TOSPlayerControlsOverlay(
                             model: nativeControlsModel(vm: vm),
-                            actions: nativeControlsActions(vm: vm)
+                            actions: nativeControlsActions(vm: vm),
+                            topInset: max(geo.safeAreaInsets.top, windowChromeTopInset(vm.webView.window))
                         ) {
                             moreMenuItems(vm: vm)
                         }
@@ -744,6 +745,19 @@ public struct TOSPlayerView: View {
     // view model's polled state (current time, duration, buffered end, mute, ad flag)
     // plus the data needed to draw chapter/SponsorBlock markers, and every action maps
     // 1:1 onto an existing TOSPlayerViewModel API or a parent-owned window action.
+
+    /// Height of the window chrome (titlebar + toolbar) above the content view, in
+    /// points, or 0 in native full screen. The macOS player window draws edge-to-edge
+    /// under its transparent titlebar, and SwiftUI's `safeAreaInsets.top` does not
+    /// reliably report that region here (issue #1 §5: the top bar must clear the
+    /// traffic lights / window title). `contentLayoutRect` is the rectangle macOS
+    /// reserves for content outside that chrome, so the difference is exactly the
+    /// offset the self-drawn top bar needs.
+    private func windowChromeTopInset(_ window: NSWindow?) -> CGFloat {
+        guard let window, !window.styleMask.contains(.fullScreen) else { return 0 }
+        let chrome = window.frame.height - window.contentLayoutRect.height
+        return max(chrome, 0)
+    }
 
     private func nativeControlsModel(vm: TOSPlayerViewModel) -> TOSPlayerControlsModel {
         TOSPlayerControlsModel(

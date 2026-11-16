@@ -134,16 +134,24 @@ public struct TOSPlayerControlsOverlay: View {
     private let model: TOSPlayerControlsModel
     private let actions: TOSPlayerControlsActions
     private let moreMenuContent: () -> AnyView
+    /// Inset from the top of this view to the top of the window's safe area. On macOS
+    /// the windowed player draws edge-to-edge under the titlebar (traffic lights,
+    /// window title), and `safeAreaInsets.top` is exactly that titlebar height — the
+    /// top bar must start below it or its buttons disappear under the OS chrome.
+    /// 0 in native full screen, where the bars can hug the top edge (issue #1 §5).
+    private let topInset: CGFloat
 
     @State private var visibility = TOSPlayerControlsVisibility()
 
     public init(
         model: TOSPlayerControlsModel,
         actions: TOSPlayerControlsActions,
+        topInset: CGFloat = 0,
         @ViewBuilder moreMenuContent: @escaping () -> some View
     ) {
         self.model = model
         self.actions = actions
+        self.topInset = topInset
         self.moreMenuContent = { AnyView(moreMenuContent()) }
     }
 
@@ -235,7 +243,7 @@ public struct TOSPlayerControlsOverlay: View {
             )
         }
         .padding(.horizontal, 20)
-        .padding(.top, 12)
+        .padding(.top, topInset + 10)
         .padding(.bottom, 18)
         .background(
             LinearGradient(
