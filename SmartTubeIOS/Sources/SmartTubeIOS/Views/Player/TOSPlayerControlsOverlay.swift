@@ -436,18 +436,14 @@ public struct TOSPlayerControlsOverlay: View {
     }
 
     private var volumeSlider: some View {
-        Slider(
-            value: Binding(
-                get: { model.isMuted ? 0 : min(max(model.volume, 0), 1) },
-                set: { actions.onVolumeChange($0) }
-            ),
-            in: 0...1
+        // Custom slider instead of SwiftUI's `Slider`: the system control inside this
+        // overlay rendered an unbounded, flickering track and its drag was swallowed.
+        TOSPlayerVolumeSlider(
+            volume: model.volume,
+            isMuted: model.isMuted,
+            onChange: { actions.onVolumeChange($0) },
+            onScrubbingChanged: { visibility.setScrubbing($0) }
         )
-        .controlSize(.mini)
-        .frame(width: 86)
-        .tint(.white)
-        .accessibilityIdentifier(AccessibilityID.TOSPlayerControls.volumeSlider)
-        .accessibilityLabel(Text("Volume", bundle: L10n.bundle))
     }
 
     private func transportButton(

@@ -682,31 +682,39 @@ final class TOSPlayerViewModel: NSObject {
     func setVolume(_ value: Double) {
         guard value.isFinite else { return }
         let clamped = min(max(value, 0), 1)
-        let jsVolume = "\(clamped)"
+        // `video.volume` is 0...1 but YouTube's player API (`#movie_player.setVolume`)
+        // is 0...100 — passing the fraction made the player think "1%" and the slider
+        // could never change the real volume (it also made the poll snap the value back
+        // to ~0, which read as a flickering volume bar on screen).
+        let jsFraction = String(format: "%.3f", clamped)
+        let jsPercent = "\(Int((clamped * 100).rounded()))"
         // Optimistic update so the slider tracks the finger without waiting for the
         // 250ms poll to round-trip; the next tick's `volume`/`muted` fields correct it.
         volume = clamped
         if clamped > 0 { isMuted = false }
         eval(
-            "setVolume(\(jsVolume))",
+            "setVolume(\(jsFraction))",
             """
             (function(){
                 var video=document.querySelector('video');
                 var ifr=document.querySelectorAll('iframe').length;
                 var mp=document.getElementById('movie_player');
                 var via=null;
-                if(mp&&typeof mp.setVolume==='function'){mp.setVolume(\(jsVolume));via='movie_player.setVolume';}
-                else if(video){video.volume=\(jsVolume);via='video.volume';}
-                if(\(jsVolume)>0){
-                    if(video){video.muted=false;}
-                    if(mp&&typeof mp.unMute==='function'){mp.unMute();}
+                if(mp&&typeof mp.setVolume==='function'){mp.setVolume(\(jsPercent));via='movie_player.setVolume';}
+                if(video){
+                    video.volume=\(jsFraction);
+                    if(\(jsFraction)>0){video.muted=false;}
+                    via=via||'video.volume';
                 }
+                if(\(jsFraction)>0&&mp&&typeof mp.unMute==='function'){mp.unMute();}
                 return {found: !!video, iframes: ifr, via: via,
                         volume: video?video.volume:null, muted: video?video.muted:null};
             })();
             """
         )
-        tosLog.notice("[controls] setVolume \(clamped, format: .fixed(precision: 2))")
+        tosLog.notice(
+            "[controls] setVolume \(clamped, format: .fixed(precision: 2)) (movie_player \(jsPercent, privacy: .public)%)"
+        )
     }
 
     /// Toggles the embed's mute state, updating `isMuted` optimistically. Uses
