@@ -100,6 +100,14 @@ final class TOSPlayerViewModel: NSObject {
     /// ad-irrelevant chrome and block seeking while set — see
     /// `TOSPlaybackTimeline.canSeek(duration:isPlayingAd:)`.
     var isPlayingAd: Bool = false
+    /// Set once `installNativeControlsChromeHidingIfNeeded()` has added the
+    /// chrome-hiding user script, so repeat loads cannot stack duplicate scripts.
+    private var hasInstalledNativeControlsChromeScript = false
+    /// The live `WKUserContentController` this web view was built with.
+    /// `webView.configuration` is a copy, so mutating *its* controller after creation
+    /// is a no-op; keeping the original reference lets the self-drawn control layer
+    /// add its chrome-hiding user script lazily (the flag is only known by then).
+    private var embedUserContentController: WKUserContentController?
     /// Single in-flight history-session resolution; tick callbacks can arrive rapidly.
     var trackingSessionTask: Task<Void, Never>?
     /// Last time tracking-URL resolution came back empty; gates retries in
@@ -404,6 +412,7 @@ final class TOSPlayerViewModel: NSObject {
         #else
         self.webView = WKWebView(frame: .zero, configuration: config)
         #endif
+        self.embedUserContentController = contentController
         // Use a TV User-Agent so YouTube serves the TV player variant of the
         // embed (vs. the web variant). The TV variant runs the YouTube TV
         // API for its player-config check, which authenticates against the
@@ -930,12 +939,34 @@ final class TOSPlayerViewModel: NSObject {
             </body>
             </html>
             """
+        // GitHub issue #1: with the app-drawn control layer active, YouTube's own
+        // chrome must not show. The hider runs at document-end in every frame (the
+        // embed is a cross-origin iframe, so this is the only way in) and keeps the
+        // ad UI alive while an ad plays.
+        installNativeControlsChromeHidingIfNeeded()
         // Use a real baseURL so the parent page has a non-null cross-origin origin.
         // This gives iframe HTTP requests a proper Referer and Sec-Fetch-Site: cross-site
         // header (matching a legitimate third-party embed). nil/about:blank produces
         // Sec-Fetch-Site: none which some YouTube CDN nodes reject.
         // Must not be youtube.com — that would trigger YouTube's self-embed detection.
         webView.loadHTMLString(html, baseURL: URL(string: "https://www.example.com")!)
+    }
+
+    /// Installs `nativeControlsChromeHidingJS` once, right before the first embed
+    /// load. Mutating the configuration's user-content controller on an existing
+    /// WKWebView is supported (the controller is shared with the web view) and takes
+    /// effect on the next navigation — which is exactly the load that follows.
+    private func installNativeControlsChromeHidingIfNeeded() {
+        guard useNativeControls, !hasInstalledNativeControlsChromeScript else { return }
+        hasInstalledNativeControlsChromeScript = true
+        embedUserContentController?.addUserScript(
+            WKUserScript(
+                source: Self.nativeControlsChromeHidingJS,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: false,
+                in: .page
+            ))
+        tosLog.notice("[controls] installed native-controls chrome-hiding script")
     }
 
     // MARK: - WKUserScripts
@@ -987,6 +1018,97 @@ final class TOSPlayerViewModel: NSObject {
         })();
         """
     #endif
+
+    /// Injected at document-end into every frame when the self-drawn control layer is
+    /// active (GitHub issue #1). YouTube renders a few chrome elements even with
+    /// controls=0 (video title/avatar overlay, watermark, end-screen cards, pause
+    /// overlay), which duplicate the app-drawn bars. Hide them with CSS, but keep
+    /// YouTube's own ad UI alive while an ad is playing: TOS compliance depends on
+    /// the user being able to see the ad countdown and the skip button.
+    private static let nativeControlsChromeHidingJS: String = """
+        (function() {
+            var STYLE_ID = 'st-native-controls-style';
+            function install() {
+                try {
+                    if (document.getElementById(STYLE_ID)) return;
+                    var style = document.createElement('style');
+                    style.id = STYLE_ID;
+                    style.textContent = [
+                        // YouTube's TV UI host: still renders the channel/title row,',
+                        // watermark and end-screen cards even with controls=0.',
+                        '#player-controls,',
+                        '.ytp-chrome-top, .ytp-chrome-bottom,',
+                        '.ytp-gradient-top, .ytp-gradient-bottom,',
+                        '.ytp-title, .ytp-title-channel, .ytp-title-text,',
+                        '.ytp-chrome-controls, .ytp-left-controls, .ytp-right-controls,',
+                        '.ytp-progress-bar-container, .ytp-share-button,',
+                        '.ytp-watch-later-button, .ytp-overflow-button,',
+                        '.ytp-watermark, .ytp-youtube-button, .ytp-pause-overlay,',
+                        '.ytp-endscreen-content, .ytp-ce-element, .ytp-cards-teaser,',
+                        '.ytp-cards-button, .ytp-paid-content-overlay, .ytp-bezel,',
+                        '.ytp-tooltip, .ytp-settings-menu, .ytp-contextmenu,',
+                        '.ytp-overflow-panel, .ytp-ad-overlay-container {',
+                        '  display: none !important;',
+                        '}',
+                        'html.st-native-ad #player-controls,',
+                        'html.st-native-ad .ytp-chrome-top,',
+                        'html.st-native-ad .ytp-chrome-bottom,',
+                        'html.st-native-ad .ytp-gradient-top,',
+                        'html.st-native-ad .ytp-gradient-bottom,',
+                        'html.st-native-ad .ytp-ad-overlay-container {',
+                        '  display: revert !important;',
+                        '}'
+                    ].join(String.fromCharCode(10));
+                    (document.head || document.documentElement).appendChild(style);
+                } catch (e) {}
+            }
+            function syncAdState() {
+                try {
+                    var ad = false;
+                    var mp = document.getElementById('movie_player');
+                    if (mp && mp.classList && mp.classList.contains('ad-showing')) { ad = true; }
+                    if (!ad) {
+                        var container = document.querySelector('.html5-video-player.ad-showing');
+                        ad = !!(container && container.classList);
+                    }
+                    var root = document.documentElement;
+                    if (root) {
+                        if (ad) { root.classList.add('st-native-ad'); }
+                        else { root.classList.remove('st-native-ad'); }
+                    }
+                } catch (e) {}
+            }
+            install();
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', install);
+            }
+            syncAdState();
+            setInterval(syncAdState, 500);
+            // One-shot diagnostic: report how many YouTube chrome elements the
+            // selectors actually matched, so the Swift log can prove the hider
+            // engaged inside the cross-origin iframe (and how much chrome is left
+            // when YouTube moves something into a shadow root).
+            // One-shot diagnostic (debug log only): proves the hider reached the
+            // cross-origin iframe and that the TV chrome host is actually display:none.
+            var _reported = false;
+            function reportChrome() {
+                if (_reported) return;
+                try {
+                    var cb = window.__nativeYTCallback;
+                    if (!cb || document.readyState !== 'complete') return;
+                    var pc = document.getElementById('player-controls');
+                    _reported = true;
+                    cb.postMessage(JSON.stringify({
+                        type: 'controlsChromeHidden',
+                        styleInjected: !!document.getElementById(STYLE_ID),
+                        playerControlsDisplay: pc ? getComputedStyle(pc).display : 'missing'
+                    }));
+                } catch (e) {}
+            }
+            setInterval(reportChrome, 700);
+            setTimeout(reportChrome, 3000);
+        })();
+        """
 
     /// JavaScript injected at document-end into the YouTube embed page.
     /// Polls the `<video>` element and relays state via window.__nativeYTCallback

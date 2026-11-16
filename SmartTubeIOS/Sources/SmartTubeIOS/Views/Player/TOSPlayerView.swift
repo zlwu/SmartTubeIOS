@@ -1155,9 +1155,10 @@ private struct PlayerWebViewSafeAreaLayout: ViewModifier {
 
 // MARK: - FullScreenToolbarHover
 
-/// Let macOS manage the navigation bar in full screen: hidden by default, shown
-/// again when the pointer reaches the top edge. This keeps both full-screen entry
-/// paths (double-click and the player's full-screen button) consistent.
+/// Windowed-mode toolbar behaviour. In full screen the system toolbar is removed
+/// entirely by `PlayerWebViewFullScreenReflow` (GitHub issue #1: the self-drawn
+/// control layer owns the top of the screen, and macOS would otherwise slide the
+/// toolbar in over it whenever the pointer reached the top edge).
 private struct FullScreenToolbarHover: ViewModifier {
     func body(content: Content) -> some View {
         #if os(macOS)
@@ -1183,6 +1184,10 @@ private struct FullScreenToolbarHover: ViewModifier {
 private struct PlayerWebViewFullScreenReflow: ViewModifier {
     let webView: WKWebView
     @Binding var isFullScreen: Bool
+    /// The window's toolbar while it is temporarily detached in native full screen.
+    /// Removing the toolbar (rather than just hiding it) is the only reliable way to
+    /// stop macOS from sliding it back in over the app-drawn top bar on hover.
+    @State private var stashedToolbar: NSToolbar?
 
     func body(content: Content) -> some View {
         #if os(macOS)
@@ -1190,6 +1195,9 @@ private struct PlayerWebViewFullScreenReflow: ViewModifier {
             .onAppear {
                 DispatchQueue.main.async {
                     isFullScreen = webView.window?.styleMask.contains(.fullScreen) ?? false
+                    if isFullScreen, let window = webView.window {
+                        hideWindowToolbar(on: window)
+                    }
                     reflow()
                 }
             }
@@ -1199,6 +1207,7 @@ private struct PlayerWebViewFullScreenReflow: ViewModifier {
                 guard let window = note.object as? NSWindow, window === webView.window else { return }
                 isFullScreen = true
                 reflow()
+                hideWindowToolbar(on: window)
             }
             .onReceive(
                 NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)
@@ -1206,6 +1215,14 @@ private struct PlayerWebViewFullScreenReflow: ViewModifier {
                 guard let window = note.object as? NSWindow, window === webView.window else { return }
                 isFullScreen = false
                 reflow()
+                restoreWindowToolbar(on: window)
+            }
+            .onDisappear {
+                // Closing the player while full screen must not strand the browse chrome
+                // without its toolbar.
+                if let window = webView.window {
+                    restoreWindowToolbar(on: window)
+                }
             }
         #else
         content
@@ -1213,6 +1230,25 @@ private struct PlayerWebViewFullScreenReflow: ViewModifier {
     }
 
     #if os(macOS)
+    /// GitHub issue #1: in native full screen the system toolbar must be gone — macOS
+    /// otherwise slides it in over the app-drawn top bar when the pointer nears the
+    /// top edge. Detach it for the duration of full screen and put it back on exit.
+    private func hideWindowToolbar(on window: NSWindow) {
+        if stashedToolbar == nil { stashedToolbar = window.toolbar }
+        let hadToolbar = window.toolbar != nil
+        window.toolbar = nil
+        tosViewLog.notice(
+            "[playermac] full screen — detached window toolbar (hadToolbar=(hadToolbar, privacy: .public))")
+    }
+
+    private func restoreWindowToolbar(on window: NSWindow) {
+        guard let toolbar = stashedToolbar else { return }
+        stashedToolbar = nil
+        window.toolbar = toolbar
+        toolbar.isVisible = true
+        tosViewLog.notice("[playermac] windowed — restored window toolbar")
+    }
+
     private func reflow() {
         let webView = self.webView
         func apply() {

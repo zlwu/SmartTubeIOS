@@ -130,6 +130,16 @@ extension TOSPlayerViewModel {
                 handlePlaybackEnd()
             }
 
+        case "controlsChromeHidden":
+            // One-shot diagnostic from nativeControlsChromeHidingJS (see
+            // TOSPlayerViewModel): confirms the injected CSS reached the embed iframe and
+            // that the YouTube TV chrome host is hidden (or YouTube changed its DOM again).
+            let styleInjected = (json["styleInjected"] as? Bool) ?? false
+            let playerControlsDisplay = (json["playerControlsDisplay"] as? String) ?? "?"
+            tosLog.debug(
+                "[controls] chrome hider — styleInjected=\(styleInjected, privacy: .public) playerControls=\(playerControlsDisplay, privacy: .public)"
+            )
+
         case "adChange":
             // One-shot transition from stateDetectionJS's ad detection
             // (#movie_player / .html5-video-player carrying 'ad-showing'). The
