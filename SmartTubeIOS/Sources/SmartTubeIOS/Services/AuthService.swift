@@ -100,8 +100,8 @@ public final class AuthService {
     static let tokenURL = URL(string: "https://oauth2.googleapis.com/token")!
     static let accountsListURL = URL(string: "https://www.youtube.com/youtubei/v1/account/accounts_list")!
 
-    public init() {
-        tokenManager = TokenManager()
+    public init(store: (any KeychainStoring)? = nil) {
+        tokenManager = TokenManager(store: store)
         loadFromKeychain()
         // UI-testing override: treat the session as signed-in so the home feed
         // renders its full shelves (including the injected Shorts row) without

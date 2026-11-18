@@ -66,7 +66,8 @@ struct TokenManagerTests {
 
     @Test("updates stream emits .refreshed when setToken is called")
     func streamEmitsRefreshedOnSetToken() async throws {
-        let tm = TokenManager(keychainService: "test-tm-stream-\(UUID().uuidString)")
+        let tm = TokenManager(
+            keychainService: "test-tm-stream-\(UUID().uuidString)", store: InMemoryKeychainStore())
 
         // Subscribe before triggering
         let task = Task<TokenManager.Update?, Never> {
@@ -91,7 +92,8 @@ struct TokenManagerTests {
 
     @Test("updates stream emits .signedOut when clearToken is called")
     func streamEmitsSignedOutOnClearToken() async throws {
-        let tm = TokenManager(keychainService: "test-tm-so-\(UUID().uuidString)")
+        let tm = TokenManager(
+            keychainService: "test-tm-so-\(UUID().uuidString)", store: InMemoryKeychainStore())
 
         // Subscribe before triggering
         let task = Task<TokenManager.Update?, Never> {

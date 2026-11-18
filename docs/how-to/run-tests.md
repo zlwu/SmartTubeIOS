@@ -1,4 +1,4 @@
-> status: current (2026-09-11)
+> status: current (2026-11-18)
 
 # How to run tests
 
@@ -45,24 +45,41 @@ it without more RAM.
 - `just test-ui-one <SmartTubeUITests/Suite/testMethod>` — a single UI test.
 - Device/app log capture during a test run: `docs/how-to/device-logs.md`.
 
-## Keychain authorization dialog during test runs
+## Keychain (auth token) storage in local runs
 
-SwiftPM test bundles are ad-hoc signed, so their code identity (a cdhash) changes on every
-build. Reading a Keychain item written by an earlier build used to trigger the macOS
-authorization dialog, which blocked the whole run until someone clicked it.
+SwiftPM test bundles and ad-hoc signed debug builds change their cdhash on every build. Reading a
+Keychain item written by an earlier build therefore triggers the macOS authorization dialog, which
+blocks the run until someone clicks it, and "Always Allow" can never stick. The earlier in-memory
+debug store avoided the dialog but dropped the sign-in on every relaunch.
 
-Debug builds now never touch the real Keychain: `KeychainStoreFactory` returns an in-memory
-store in `#if DEBUG`, so tests and locally-run debug apps start signed out and never prompt.
-Release builds still use the real Keychain. Two consequences:
+Debug builds now default to `FileKeychainStore` (see
+[ADR-0010](../adr/0010-debug-file-backed-keychain.md)):
 
-- A debug run that needs persisted credentials must opt back in with
-  `SMARTTUBE_KEYCHAIN=keychain` (and will then ask for authorization). Don't use this in
-  agent sessions.
-- UI tests that need a signed-in UI use the app's `--uitesting-signed-in` launch argument or
-  a fake at the seam; the simulator's Keychain is irrelevant to them now.
+| Item | Value |
+|---|---|
+| Default root | `Application Support/<bundle-id>/DebugKeychain` (inside the app container) |
+| Layout | one file per key: `<root>/com.smarttube.auth/st_access_token`, raw UTF-8 |
+| Permissions | directory `0700`, files `0600`, excluded from backup |
+| Reset | sign out in the app, or delete the directory (the log prints its absolute path) |
 
-## Known failure
+The app logs the resolved path at launch: `KeychainStore: using file store at <path>`.
 
-`just test-unit` currently fails to build (pre-existing, not test-writing-related) — see
-`AGENTS.md`'s Gotchas. Native-macOS-only code in `TOSPlayerView.swift`/
-`TOSPlayerViewModel+WebBridge.swift` doesn't compile. Fixing it is WS4/WS5 scope.
+| `SMARTTUBE_KEYCHAIN` | Debug | Release |
+|---|---|---|
+| unset | file store | real Keychain |
+| `file` | file store | file store (local runs only) |
+| `memory` | in-memory | real Keychain |
+| `keychain` | real Keychain (prompts) | real Keychain |
+
+- Unit tests are detected automatically and use the in-memory store, so they never read or write
+  the debug files. UI tests that pass `--uitesting` do the same; the five tvOS suites that do not
+  pass it set `launchEnvironment["SMARTTUBE_KEYCHAIN"] = "memory"` explicitly.
+- `SMARTTUBE_KEYCHAIN_DIR` overrides the root (absolute path; `~` is expanded). The app is
+  sandboxed, so the value must be writable by it — `~/.config` and repo paths are not.
+- The debug store is plaintext. It is compiled in all configurations only so a *local* Release run
+  can opt in; App Store builds never set the variable. Never ship a Release build with
+  `SMARTTUBE_KEYCHAIN=file`, and never point `SMARTTUBE_KEYCHAIN_DIR` at a tracked path or commit
+  its contents.
+- A locally packaged macOS app (`just macos-package`) does not inherit shell variables when opened
+  from Finder: use `launchctl setenv SMARTTUBE_KEYCHAIN file` before launching it, or keep the real
+  Keychain.
