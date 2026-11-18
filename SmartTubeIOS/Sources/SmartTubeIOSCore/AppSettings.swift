@@ -318,7 +318,7 @@ public struct AppSettings: Codable {
         language = .system
         accentColor = .system
         gridColumnsPortrait = 2
-        gridColumnsLandscape = 3
+        gridColumnsLandscape = 4
         enabledSections = BrowseSection.defaultSections.map(\.type)
         historyState = .enabled
         sponsorBlockEnabled = true

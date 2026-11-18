@@ -15,7 +15,7 @@ struct AppSettingsAppearanceTests {
         let settings = try decode("{}")
         #expect(settings.accentColor == .system)
         #expect(settings.gridColumnsPortrait == 2)
-        #expect(settings.gridColumnsLandscape == 3)
+        #expect(settings.gridColumnsLandscape == 4)
     }
 
     @Test("Accent color round-trips", arguments: AppSettings.AccentColorChoice.allCases)
