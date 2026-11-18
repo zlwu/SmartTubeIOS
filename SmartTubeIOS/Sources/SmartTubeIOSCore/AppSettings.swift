@@ -180,6 +180,13 @@ public struct AppSettings: Codable {
     /// Opt-in experiment — has no effect on tvOS.
     public var useTOSPlayerOnMac: Bool
 
+    /// When `true` on macOS, the TOS player draws its own control layer (top bar,
+    /// bottom scrubber bar, keyboard shortcuts) and loads the YouTube embed with
+    /// `controls=0` instead of showing YouTube's own chrome — see GitHub issue #1
+    /// ("彻底自绘播放器"). Ads still play; the embed's ad-skip button has not been
+    /// verified on device yet, so this stays opt-in. Has no effect on iOS/tvOS.
+    public var useCustomTOSControlsOnMac: Bool
+
     // Note: there is no `useTOSPlayerOnIOS` setting. The TOS-compliant player is
     // always used on iOS (PlayerRouter.open(), gated #if os(iOS)) — see
     // SettingsStore.useTOSPlayerOnIOS, which is a non-persisted, hardcoded-true
@@ -340,6 +347,10 @@ public struct AppSettings: Codable {
         #else
         useTOSPlayerOnMac = false
         #endif
+        // Default on (issue #1): Settings → Experimental can switch back to YouTube's
+        // embedded chrome. Known caveat: with controls=0 YouTube's own ad-skip button
+        // is not rendered.
+        useCustomTOSControlsOnMac = true
         settingsVersion = 1
     }
 }
@@ -414,6 +425,7 @@ extension AppSettings {
         case preferH264
         case iCloudSyncEnabled
         case useTOSPlayerOnMac
+        case useCustomTOSControlsOnMac
     }
 
     public init(from decoder: Decoder) throws {
@@ -486,5 +498,7 @@ extension AppSettings {
         preferH264 = c.safeDecode(Bool.self, forKey: .preferH264, default: d.preferH264)
         iCloudSyncEnabled = c.safeDecode(Bool.self, forKey: .iCloudSyncEnabled, default: d.iCloudSyncEnabled)
         useTOSPlayerOnMac = c.safeDecode(Bool.self, forKey: .useTOSPlayerOnMac, default: d.useTOSPlayerOnMac)
+        useCustomTOSControlsOnMac = c.safeDecode(
+            Bool.self, forKey: .useCustomTOSControlsOnMac, default: d.useCustomTOSControlsOnMac)
     }
 }

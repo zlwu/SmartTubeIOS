@@ -272,12 +272,28 @@ public struct TOSPlayerView: View {
                     #endif
 
                     #if os(macOS)
-                    // MARK: Top-right control cluster — more menu (like/dislike, sleep
-                    // timer, share) + playback speed picker. Restored alongside the
-                    // system navigation bar; positioned below the toolbar's safe area.
-                    topRightControls(topInset: geo.safeAreaInsets.top, vm: vm)
-                        .opacity(isNativeFullScreen ? 0 : 1)
-                        .allowsHitTesting(!isNativeFullScreen)
+                    // MARK: Player controls
+                    // GitHub issue #1 (彻底自绘播放器): when the experimental self-drawn
+                    // control layer is enabled, loadEmbed() requested controls=0 above and
+                    // this overlay is the only player UI — top bar + bottom scrubber bar,
+                    // auto-hide, keyboard shortcuts. Otherwise the historical control
+                    // cluster (more + speed) sits above YouTube's own controls=1 chrome.
+                    if vm.useNativeControls {
+                        TOSPlayerControlsOverlay(
+                            model: nativeControlsModel(vm: vm),
+                            actions: nativeControlsActions(vm: vm),
+                            topInset: max(geo.safeAreaInsets.top, windowChromeTopInset(vm.webView.window))
+                        ) {
+                            moreMenuItems(vm: vm)
+                        }
+                    } else {
+                        // MARK: Top-right control cluster — more menu (like/dislike, sleep
+                        // timer, share) + playback speed picker. Restored alongside the
+                        // system navigation bar; positioned below the toolbar's safe area.
+                        topRightControls(topInset: geo.safeAreaInsets.top, vm: vm)
+                            .opacity(isNativeFullScreen ? 0 : 1)
+                            .allowsHitTesting(!isNativeFullScreen)
+                    }
                     #endif
 
                     #if os(iOS)
@@ -376,6 +392,12 @@ public struct TOSPlayerView: View {
             .onAppear {
                 vm.updateSettings(store.settings)
                 #if os(macOS)
+                // GitHub issue #1: the app-drawn control layer requires the embed to
+                // load with controls=0, and loadEmbed() reads this flag when it builds
+                // the embed URL. Must be set before the window-ready callback (1.5 s
+                // asyncAfter) triggers startIfNeededWhenWindowReady(), hence it is the
+                // first thing onAppear does. iOS keeps YouTube's own chrome for now.
+                vm.useNativeControls = store.settings.useCustomTOSControlsOnMac
                 // The embed's own fullscreen button also toggles this window's native
                 // full screen (see macOSNativeFullscreenJS) so both paths match.
                 vm.onToggleFullscreen = { [weak vm] in
@@ -503,6 +525,12 @@ public struct TOSPlayerView: View {
             // the browse content underneath and does not affect this overlay at all —
             // Esc is genuinely the only way in.
             .onExitCommand {
+                // In native full screen Esc must leave full screen first (the issue #1
+                // expectation: "Esc 退出全屏/关闭"), not close the player outright.
+                if let window = vm.webView.window, window.styleMask.contains(.fullScreen) {
+                    window.toggleFullScreen(nil)
+                    return
+                }
                 browseVM.deepLinkedVideo = nil
                 dismiss()
             }
@@ -574,6 +602,7 @@ public struct TOSPlayerView: View {
                 PlayerWebViewFullScreenReflow(webView: vm.webView, isFullScreen: $isNativeFullScreen)
             )
             .modifier(FullScreenToolbarHover())
+            .modifier(PlayerWindowChromeHiding(webView: vm.webView, isEnabled: vm.useNativeControls))
         )
     }
 
@@ -710,6 +739,79 @@ public struct TOSPlayerView: View {
         .padding(.trailing, 16)
     }
 
+    #if os(macOS)
+    // MARK: - Self-drawn control layer (GitHub issue #1)
+    //
+    // The overlay is a dumb view: the model below is a pure value snapshot of the
+    // view model's polled state (current time, duration, buffered end, mute, ad flag)
+    // plus the data needed to draw chapter/SponsorBlock markers, and every action maps
+    // 1:1 onto an existing TOSPlayerViewModel API or a parent-owned window action.
+
+    /// Height of the window chrome (titlebar + toolbar) above the content view, in
+    /// points, or 0 in native full screen. The macOS player window draws edge-to-edge
+    /// under its transparent titlebar, and SwiftUI's `safeAreaInsets.top` does not
+    /// reliably report that region here (issue #1 §5: the top bar must clear the
+    /// traffic lights / window title). `contentLayoutRect` is the rectangle macOS
+    /// reserves for content outside that chrome, so the difference is exactly the
+    /// offset the self-drawn top bar needs.
+    private func windowChromeTopInset(_ window: NSWindow?) -> CGFloat {
+        guard let window, !window.styleMask.contains(.fullScreen) else { return 0 }
+        let chrome = window.frame.height - window.contentLayoutRect.height
+        return max(chrome, 0)
+    }
+
+    private func nativeControlsModel(vm: TOSPlayerViewModel) -> TOSPlayerControlsModel {
+        TOSPlayerControlsModel(
+            title: vm.videoTitle,
+            channelTitle: vm.channelTitle,
+            currentTime: vm.currentTime,
+            duration: vm.duration,
+            bufferedEnd: vm.bufferedEnd,
+            isPlaying: vm.playerState == .playing || vm.playerState == .buffering,
+            isPlayingAd: vm.isPlayingAd,
+            isMuted: vm.isMuted,
+            volume: vm.volume,
+            isFullScreen: isNativeFullScreen,
+            speedLabel: speedLabel(for: store.settings.playbackSpeed),
+            canGoPrevious: vm.hasPrevious,
+            canGoNext: vm.hasNext,
+            seekBackSeconds: store.settings.seekBackSeconds,
+            seekForwardSeconds: store.settings.seekForwardSeconds,
+            chapters: vm.chapters,
+            sponsorSegments: vm.sponsorSegments
+        )
+    }
+
+    private func nativeControlsActions(vm: TOSPlayerViewModel) -> TOSPlayerControlsActions {
+        TOSPlayerControlsActions(
+            onClose: {
+                // Mirrors the Esc behaviour above: leave native full screen first, only
+                // then dismiss the player.
+                if let window = vm.webView.window, window.styleMask.contains(.fullScreen) {
+                    window.toggleFullScreen(nil)
+                    return
+                }
+                browseVM.deepLinkedVideo = nil
+                dismiss()
+            },
+            onPlayPause: { vm.togglePlayPause() },
+            onSeek: { vm.seekTo($0) },
+            onSeekRelative: { vm.seekRelative($0) },
+            onPrevious: { vm.playPrevious() },
+            onNext: { vm.playNext() },
+            onToggleFullscreen: {
+                (vm.webView.window ?? NSApp.keyWindow)?.toggleFullScreen(nil)
+            },
+            onToggleMute: { vm.toggleMute() },
+            onVolumeChange: { vm.setVolume($0) },
+            onSpeedSelected: { speed in
+                store.settings.playbackSpeed = speed
+                vm.setPlaybackRate(speed)
+            }
+        )
+    }
+    #endif
+
     /// Transferred from PlayerView+PickerOverlays.speedPickerOverlay — same source of
     /// truth (`AppSettings.availableSpeeds` / `store.settings.playbackSpeed`) and the
     /// same JS-bridge call (`vm.setPlaybackRate`). The displayed speed is
@@ -768,94 +870,9 @@ public struct TOSPlayerView: View {
     //                     CommentRowView (PlayerView+AuxViews.swift).
     private func moreButton(vm: TOSPlayerViewModel) -> some View {
         Menu {
-            if authService.isSignedIn {
-                Button {
-                    vm.like()
-                } label: {
-                    Label(
-                        vm.likeStatus == .like ? L10n.string("Liked") : L10n.string("Like"),
-                        systemImage: vm.likeStatus == .like ? "hand.thumbsup.fill" : "hand.thumbsup")
-                }
-                .accessibilityIdentifier("tosPlayer.moreMenu.likeRow")
-
-                Button {
-                    vm.dislike()
-                } label: {
-                    Label(
-                        vm.likeStatus == .dislike ? L10n.string("Disliked") : L10n.string("Dislike"),
-                        systemImage: vm.likeStatus == .dislike ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                }
-                .accessibilityIdentifier("tosPlayer.moreMenu.dislikeRow")
-
-                Divider()
-            }
-
-            Menu {
-                Button {
-                    vm.setSleepTimer(minutes: nil)
-                } label: {
-                    if vm.sleepTimerMinutes == nil {
-                        Label(L10n.string("Off"), systemImage: "checkmark")
-                    } else {
-                        Text("Off", bundle: L10n.bundle)
-                    }
-                }
-                ForEach(PlaybackViewModel.sleepTimerOptions, id: \.self) { mins in
-                    Button {
-                        vm.setSleepTimer(minutes: mins)
-                    } label: {
-                        if vm.sleepTimerMinutes == mins {
-                            Label(L10n.string("\(mins) minutes"), systemImage: "checkmark")
-                        } else {
-                            Text("\(mins) minutes", bundle: L10n.bundle)
-                        }
-                    }
-                }
-            } label: {
-                Label(sleepTimerLabel(vm: vm), systemImage: "moon.zzz")
-            }
-            .accessibilityIdentifier("tosPlayer.moreMenu.sleepTimerRow")
-
-            if let url = video.shareURL {
-                ShareLink(item: url) {
-                    Label(L10n.string("Share"), systemImage: "square.and.arrow.up")
-                }
-                .accessibilityIdentifier("tosPlayer.moreMenu.shareRow")
-            }
-
-            Button {
-                showCommentsSheet = true
-                vm.loadComments()
-            } label: {
-                Label(L10n.string("Comments"), systemImage: "bubble.left.and.bubble.right")
-            }
-            .accessibilityIdentifier("tosPlayer.moreMenu.commentsRow")
-
-            if !vm.chapters.isEmpty {
-                Button {
-                    showChaptersSheet = true
-                } label: {
-                    Label(L10n.string("Chapters"), systemImage: "list.bullet.rectangle")
-                }
-                .accessibilityIdentifier("tosPlayer.moreMenu.chaptersRow")
-            }
-
-            Button {
-                store.settings.loopEnabled.toggle()
-            } label: {
-                if store.settings.loopEnabled {
-                    Label(L10n.string("Loop"), systemImage: "checkmark")
-                } else {
-                    Text("Loop", bundle: L10n.bundle)
-                }
-            }
-            .accessibilityIdentifier("tosPlayer.moreMenu.loopRow")
+            moreMenuItems(vm: vm)
         } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(9)
-                .background(.ultraThinMaterial, in: Circle())
+            moreMenuLabel
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -863,6 +880,102 @@ public struct TOSPlayerView: View {
         .fixedSize()
         .accessibilityIdentifier("tosPlayer.moreButton")
         .accessibilityLabel(Text("More", bundle: L10n.bundle))
+    }
+
+    /// The "more" menu's contents, shared by the legacy top-right button (controls=1)
+    /// and the self-drawn control layer's more menu (GitHub issue #1) so both paths
+    /// expose exactly the same actions.
+    @ViewBuilder private func moreMenuItems(vm: TOSPlayerViewModel) -> some View {
+        if authService.isSignedIn {
+            Button {
+                vm.like()
+            } label: {
+                Label(
+                    vm.likeStatus == .like ? L10n.string("Liked") : L10n.string("Like"),
+                    systemImage: vm.likeStatus == .like ? "hand.thumbsup.fill" : "hand.thumbsup")
+            }
+            .accessibilityIdentifier("tosPlayer.moreMenu.likeRow")
+
+            Button {
+                vm.dislike()
+            } label: {
+                Label(
+                    vm.likeStatus == .dislike ? L10n.string("Disliked") : L10n.string("Dislike"),
+                    systemImage: vm.likeStatus == .dislike ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+            }
+            .accessibilityIdentifier("tosPlayer.moreMenu.dislikeRow")
+
+            Divider()
+        }
+
+        Menu {
+            Button {
+                vm.setSleepTimer(minutes: nil)
+            } label: {
+                if vm.sleepTimerMinutes == nil {
+                    Label(L10n.string("Off"), systemImage: "checkmark")
+                } else {
+                    Text("Off", bundle: L10n.bundle)
+                }
+            }
+            ForEach(PlaybackViewModel.sleepTimerOptions, id: \.self) { mins in
+                Button {
+                    vm.setSleepTimer(minutes: mins)
+                } label: {
+                    if vm.sleepTimerMinutes == mins {
+                        Label(L10n.string("\(mins) minutes"), systemImage: "checkmark")
+                    } else {
+                        Text("\(mins) minutes", bundle: L10n.bundle)
+                    }
+                }
+            }
+        } label: {
+            Label(sleepTimerLabel(vm: vm), systemImage: "moon.zzz")
+        }
+        .accessibilityIdentifier("tosPlayer.moreMenu.sleepTimerRow")
+
+        if let url = video.shareURL {
+            ShareLink(item: url) {
+                Label(L10n.string("Share"), systemImage: "square.and.arrow.up")
+            }
+            .accessibilityIdentifier("tosPlayer.moreMenu.shareRow")
+        }
+
+        Button {
+            showCommentsSheet = true
+            vm.loadComments()
+        } label: {
+            Label(L10n.string("Comments"), systemImage: "bubble.left.and.bubble.right")
+        }
+        .accessibilityIdentifier("tosPlayer.moreMenu.commentsRow")
+
+        if !vm.chapters.isEmpty {
+            Button {
+                showChaptersSheet = true
+            } label: {
+                Label(L10n.string("Chapters"), systemImage: "list.bullet.rectangle")
+            }
+            .accessibilityIdentifier("tosPlayer.moreMenu.chaptersRow")
+        }
+
+        Button {
+            store.settings.loopEnabled.toggle()
+        } label: {
+            if store.settings.loopEnabled {
+                Label(L10n.string("Loop"), systemImage: "checkmark")
+            } else {
+                Text("Loop", bundle: L10n.bundle)
+            }
+        }
+        .accessibilityIdentifier("tosPlayer.moreMenu.loopRow")
+    }
+
+    private var moreMenuLabel: some View {
+        Image(systemName: "ellipsis")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(9)
+            .background(.ultraThinMaterial, in: Circle())
     }
 
     private func sleepTimerLabel(vm: TOSPlayerViewModel) -> String {
@@ -1043,9 +1156,10 @@ private struct PlayerWebViewSafeAreaLayout: ViewModifier {
 
 // MARK: - FullScreenToolbarHover
 
-/// Let macOS manage the navigation bar in full screen: hidden by default, shown
-/// again when the pointer reaches the top edge. This keeps both full-screen entry
-/// paths (double-click and the player's full-screen button) consistent.
+/// Windowed-mode toolbar behaviour. In full screen the system toolbar is removed
+/// entirely by `PlayerWebViewFullScreenReflow` (GitHub issue #1: the self-drawn
+/// control layer owns the top of the screen, and macOS would otherwise slide the
+/// toolbar in over it whenever the pointer reached the top edge).
 private struct FullScreenToolbarHover: ViewModifier {
     func body(content: Content) -> some View {
         #if os(macOS)
@@ -1060,6 +1174,135 @@ private struct FullScreenToolbarHover: ViewModifier {
     }
 }
 
+// MARK: - PlayerWindowChromeHiding
+
+/// GitHub issue #1: while the self-drawn control layer owns the player, macOS shows
+/// no system navigation bar at all. In full screen the toolbar is detached from the
+/// window; in *windowed* playback the titlebar title and the toolbar are hidden too
+/// and the content is allowed to extend behind the traffic lights (the traffic lights
+/// themselves stay — the in-app close button is the player's own affordance, and they
+/// are what makes the window draggable). Everything is restored when the player
+/// closes or the experiment is switched off.
+///
+/// This replaces the old "hide the toolbar only while full screen" behaviour: with the
+/// setting on, the player is chrome-free in both modes.
+private struct PlayerWindowChromeHiding: ViewModifier {
+    let webView: WKWebView
+    let isEnabled: Bool
+
+    #if os(macOS)
+    @State private var stashedToolbar: NSToolbar?
+    @State private var stashedTitleVisibility: NSWindow.TitleVisibility = .visible
+    @State private var stashedTitlebarTransparent = false
+    @State private var didStash = false
+    #endif
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .onAppear { applyWindowChrome() }
+            .onChange(of: isEnabled) { _, _ in applyWindowChrome() }
+            .onDisappear { restoreWindowChrome() }
+            // Opening a SwiftUI Menu (speed / more) makes AppKit/SwiftUI re-install
+            // the window toolbar in some states — re-assert right when menu tracking
+            // or key-window changes happen, and keep a cheap periodic guard for the
+            // paths that don't post a notification. Without this the system
+            // navigation bar pops back the moment the user opens the speed menu.
+            .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { _ in
+                reassertWindowChrome()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { _ in
+                reassertWindowChrome()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+                guard (note.object as? NSWindow) === webView.window else { return }
+                reassertWindowChrome()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didUpdateNotification)) { note in
+                guard (note.object as? NSWindow) === webView.window else { return }
+                reassertWindowChrome()
+            }
+            .task(id: isEnabled) {
+                guard isEnabled else { return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    if Task.isCancelled { return }
+                    reassertWindowChrome()
+                }
+            }
+        #else
+        content
+        #endif
+    }
+
+    #if os(macOS)
+    private func applyWindowChrome() {
+        DispatchQueue.main.async {
+            guard isEnabled, let window = webView.window else {
+                restoreWindowChrome()
+                return
+            }
+            let isFirstApply = !didStash
+            if isFirstApply {
+                stashedToolbar = window.toolbar
+                stashedTitleVisibility = window.titleVisibility
+                stashedTitlebarTransparent = window.titlebarAppearsTransparent
+                didStash = true
+            }
+            window.toolbar = nil
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            reflowWebView()
+            if isFirstApply {
+                tosViewLog.notice(
+                    "[playermac] hid window chrome for self-drawn controls (fullScreen=\(window.styleMask.contains(.fullScreen), privacy: .public))"
+                )
+            }
+        }
+    }
+
+    /// Puts the window chrome back into its hidden state if AppKit/SwiftUI restored
+    /// it (e.g. after a menu opens, or when the window becomes key again).
+    private func reassertWindowChrome() {
+        guard isEnabled, didStash, let window = webView.window else { return }
+        let chromeRestored =
+            window.toolbar != nil || window.titleVisibility != .hidden || !window.titlebarAppearsTransparent
+        guard chromeRestored else { return }
+        window.toolbar = nil
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        reflowWebView()
+        tosViewLog.notice("[playermac] re-hid window chrome after it was restored")
+    }
+
+    private func restoreWindowChrome() {
+        guard didStash, let window = webView.window else { return }
+        window.toolbar = stashedToolbar
+        stashedToolbar?.isVisible = true
+        window.titleVisibility = stashedTitleVisibility
+        window.titlebarAppearsTransparent = stashedTitlebarTransparent
+        didStash = false
+        reflowWebView()
+        tosViewLog.notice("[playermac] restored window chrome")
+    }
+
+    /// The window's toolbar/titlebar change can leave WKWebView at its previous size
+    /// (black band). Re-apply the hosting frame once the transition settles.
+    private func reflowWebView() {
+        let webView = self.webView
+        func apply() {
+            if let superview = webView.superview, superview.bounds.size != .zero {
+                webView.frame = superview.bounds
+            }
+            webView.needsLayout = true
+            webView.layoutSubtreeIfNeeded()
+        }
+        DispatchQueue.main.async(execute: apply)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: apply)
+    }
+    #endif
+}
+
 // MARK: - PlayerWebViewFullScreenReflow
 
 /// WKWebView occasionally keeps its pre-full-screen size (video stuck in the
@@ -1071,6 +1314,10 @@ private struct FullScreenToolbarHover: ViewModifier {
 private struct PlayerWebViewFullScreenReflow: ViewModifier {
     let webView: WKWebView
     @Binding var isFullScreen: Bool
+    /// The window's toolbar while it is temporarily detached in native full screen.
+    /// Removing the toolbar (rather than just hiding it) is the only reliable way to
+    /// stop macOS from sliding it back in over the app-drawn top bar on hover.
+    @State private var stashedToolbar: NSToolbar?
 
     func body(content: Content) -> some View {
         #if os(macOS)
@@ -1078,6 +1325,9 @@ private struct PlayerWebViewFullScreenReflow: ViewModifier {
             .onAppear {
                 DispatchQueue.main.async {
                     isFullScreen = webView.window?.styleMask.contains(.fullScreen) ?? false
+                    if isFullScreen, let window = webView.window {
+                        hideWindowToolbar(on: window)
+                    }
                     reflow()
                 }
             }
@@ -1087,6 +1337,7 @@ private struct PlayerWebViewFullScreenReflow: ViewModifier {
                 guard let window = note.object as? NSWindow, window === webView.window else { return }
                 isFullScreen = true
                 reflow()
+                hideWindowToolbar(on: window)
             }
             .onReceive(
                 NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)
@@ -1094,6 +1345,14 @@ private struct PlayerWebViewFullScreenReflow: ViewModifier {
                 guard let window = note.object as? NSWindow, window === webView.window else { return }
                 isFullScreen = false
                 reflow()
+                restoreWindowToolbar(on: window)
+            }
+            .onDisappear {
+                // Closing the player while full screen must not strand the browse chrome
+                // without its toolbar.
+                if let window = webView.window {
+                    restoreWindowToolbar(on: window)
+                }
             }
         #else
         content
@@ -1101,6 +1360,25 @@ private struct PlayerWebViewFullScreenReflow: ViewModifier {
     }
 
     #if os(macOS)
+    /// GitHub issue #1: in native full screen the system toolbar must be gone — macOS
+    /// otherwise slides it in over the app-drawn top bar when the pointer nears the
+    /// top edge. Detach it for the duration of full screen and put it back on exit.
+    private func hideWindowToolbar(on window: NSWindow) {
+        if stashedToolbar == nil { stashedToolbar = window.toolbar }
+        let hadToolbar = window.toolbar != nil
+        window.toolbar = nil
+        tosViewLog.notice(
+            "[playermac] full screen — detached window toolbar (hadToolbar=(hadToolbar, privacy: .public))")
+    }
+
+    private func restoreWindowToolbar(on window: NSWindow) {
+        guard let toolbar = stashedToolbar else { return }
+        stashedToolbar = nil
+        window.toolbar = toolbar
+        toolbar.isVisible = true
+        tosViewLog.notice("[playermac] windowed — restored window toolbar")
+    }
+
     private func reflow() {
         let webView = self.webView
         func apply() {

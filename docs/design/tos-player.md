@@ -57,6 +57,31 @@ If `playerError.isFatal` (error 100/101/150/153), `TOSPlayerView` calls `onFallb
 `MainSidebarView` sets `tosPlayerFallbackVideoId = video.id`, which switches that video
 to the standard `PlayerView`. The guard clears when a different video is opened.
 
+**Self-drawn control layer (default on, macOS — GitHub issue #1)**
+
+On by default: the app-drawn layer is the normal player UI. Turning off
+`Settings → Experimental → Self-Drawn Player Controls`
+(`AppSettings.useCustomTOSControlsOnMac`; the toggle is disabled while the
+IFrame Player toggle is off) makes `loadEmbed()` keep `controls=1`, so YouTube's own
+chrome is the only UI. With the setting on, `TOSPlayerView` sets
+`TOSPlayerViewModel.useNativeControls` before the load starts, so the IFrame is requested
+with `controls=0` and the app draws the chrome itself:
+
+- `TOSPlayerControlsOverlay` — top bar (back, title) and bottom bar (play/pause, mute,
+  elapsed/total labels, full screen) over the WKWebView, plus a scrubber with a buffered
+  underlay.
+- `TOSPlayerControlsAutoHide` — auto-hide timer and keyboard shortcuts for the overlay.
+- `TOSPlayerViewModel` — `setPlaying`/`togglePlayPause`/`setVolume`/`toggleMute` are
+  frame-targeted `eval`s into the embed; `stateDetectionJS` pushes `bufferedEnd`,
+  `volume`, `muted` and `isAd` back on the existing `ready`/`tick`/`stateChange`
+  payloads and emits a one-shot `adChange` on ad transitions.
+- `TOSPlaybackTimeline` (`SmartTubeIOSCore`) — pure `timeLabel` / `progressFraction` /
+  `bufferedFraction` / `canSeek` math; tests in `TOSPlaybackTimelineTests`.
+
+Ads still play with `controls=0`, but the embed's ad-skip button is not rendered by
+YouTube's chrome — that is the known caveat of the default (issue #1 §6); the setting
+remains as a switch back. It has no effect on iOS/tvOS.
+
 ---
 
 ## Key Decisions
@@ -71,6 +96,8 @@ to the standard `PlayerView`. The guard clears when a different video is opened.
 | `didCommit` (not `didFinish`) for `navfinished` | `didFinish` waits for all subframes; the YouTube iframe may not finish if error 153 loops. `didCommit` fires as soon as the main HTML document is committed |
 | `startIfNeeded()` guard (`hasStartedLoading`) | SwiftUI calls `View.init()` many times per render cycle, creating and discarding `State(initialValue:)` values. Only the instance that appears in view hierarchy calls `startIfNeeded()` |
 | `#if os(macOS)` around `TOSPlayerView` in RootView | `TOSPlayerView` and `TOSPlayerViewModel` are macOS-only; iOS build would fail without the guard |
+| `controls=0` embed + app-drawn chrome **on by default** | Issue #1 (彻底自绘播放器). Ads still play; the embed's ad-skip button is not rendered by YouTube's chrome (issue #1 §6), so Settings → Experimental keeps a switch back to `controls=1` |
+| Timeline math in `TOSPlaybackTimeline` (`SmartTubeIOSCore`) | Pure formatting/clamping/ad-aware seek gating is unit-testable without a WKWebView or a player instance |
 
 ---
 
