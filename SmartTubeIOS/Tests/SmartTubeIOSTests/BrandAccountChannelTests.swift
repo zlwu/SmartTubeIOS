@@ -184,7 +184,8 @@ struct BrandAccountSuites {
         @Test("should persist the pageId in the Keychain across TokenManager instances")
         func persistsPageId() async {
             let service = "test-tm-pageid-\(UUID().uuidString)"
-            let store = InMemoryKeychainStore()
+            let (store, directory) = makeTemporaryKeychainStore()
+            defer { try? FileManager.default.removeItem(at: directory) }
             let tm = TokenManager(keychainService: service, store: store)
 
             await tm.setPageId("100000000000000000001")
@@ -198,7 +199,8 @@ struct BrandAccountSuites {
         @Test("should remove the pageId on sign-out")
         func clearTokenRemovesPageId() async {
             let service = "test-tm-pageid-clear-\(UUID().uuidString)"
-            let store = InMemoryKeychainStore()
+            let (store, directory) = makeTemporaryKeychainStore()
+            defer { try? FileManager.default.removeItem(at: directory) }
             let tm = TokenManager(keychainService: service, store: store)
             await tm.setPageId("222")
 
@@ -212,7 +214,8 @@ struct BrandAccountSuites {
         @Test("should go back to the primary account when storing a nil pageId")
         func nilPageIdRemovesEntry() async {
             let service = "test-tm-pageid-nil-\(UUID().uuidString)"
-            let store = InMemoryKeychainStore()
+            let (store, directory) = makeTemporaryKeychainStore()
+            defer { try? FileManager.default.removeItem(at: directory) }
             let tm = TokenManager(keychainService: service, store: store)
             await tm.setPageId("333")
 
@@ -248,7 +251,9 @@ struct BrandAccountSuites {
         // deve disparar activeChannelDidChange ao trocar para um Brand Account diferente do ativo
         @Test("should post activeChannelDidChange when switching to a different Brand Account")
         func postsChangeOnSwitch() {
-            let auth = AuthService()
+            let (store, directory) = makeTemporaryKeychainStore()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let auth = AuthService(store: store)
             auth.applyChannels([primary, brand])
             defer { auth.resetChannels() }
 
@@ -261,7 +266,9 @@ struct BrandAccountSuites {
         // não deve disparar activeChannelDidChange ao selecionar o canal que já está ativo
         @Test("should not post activeChannelDidChange when selecting the already active channel")
         func skipsChangeForActiveChannel() {
-            let auth = AuthService()
+            let (store, directory) = makeTemporaryKeychainStore()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let auth = AuthService(store: store)
             auth.applyChannels([primary, brand])
             auth.selectChannel(brand)
             defer { auth.resetChannels() }
@@ -274,7 +281,9 @@ struct BrandAccountSuites {
         // deve limpar o canal selecionado no logout e enviar a próxima requisição sem X-Goog-Pageid
         @Test("should clear the selected channel on sign-out and send the next request without X-Goog-Pageid")
         func signOutClearsSelectedChannel() async {
-            let auth = AuthService()
+            let (store, directory) = makeTemporaryKeychainStore()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let auth = AuthService(store: store)
             auth.applyChannels([primary, brand])
             auth.selectChannel(brand)
 

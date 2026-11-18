@@ -19,7 +19,8 @@ struct TokenManagerTests {
     @Test("setToken persists all fields to Keychain across instances")
     func setTokenPersistsToKeychain() async throws {
         let service = "test-tm-\(UUID().uuidString)"
-        let store = InMemoryKeychainStore()
+        let (store, directory) = makeTemporaryKeychainStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
         let tm = TokenManager(keychainService: service, store: store)
         let expiry = Date(timeIntervalSinceNow: 3600)
 
@@ -50,7 +51,8 @@ struct TokenManagerTests {
     @Test("clearToken removes all Keychain entries")
     func clearTokenRemovesFromKeychain() async throws {
         let service = "test-tm-clear-\(UUID().uuidString)"
-        let store = InMemoryKeychainStore()
+        let (store, directory) = makeTemporaryKeychainStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
         let tm = TokenManager(keychainService: service, store: store)
 
         await tm.setToken(access: "tok", refresh: "ref", expiry: nil, accountName: "Bob", avatarURL: nil)
@@ -66,7 +68,10 @@ struct TokenManagerTests {
 
     @Test("updates stream emits .refreshed when setToken is called")
     func streamEmitsRefreshedOnSetToken() async throws {
-        let tm = TokenManager(keychainService: "test-tm-stream-\(UUID().uuidString)")
+        let (store, directory) = makeTemporaryKeychainStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let tm = TokenManager(
+            keychainService: "test-tm-stream-\(UUID().uuidString)", store: store)
 
         // Subscribe before triggering
         let task = Task<TokenManager.Update?, Never> {
@@ -91,7 +96,10 @@ struct TokenManagerTests {
 
     @Test("updates stream emits .signedOut when clearToken is called")
     func streamEmitsSignedOutOnClearToken() async throws {
-        let tm = TokenManager(keychainService: "test-tm-so-\(UUID().uuidString)")
+        let (store, directory) = makeTemporaryKeychainStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let tm = TokenManager(
+            keychainService: "test-tm-so-\(UUID().uuidString)", store: store)
 
         // Subscribe before triggering
         let task = Task<TokenManager.Update?, Never> {
