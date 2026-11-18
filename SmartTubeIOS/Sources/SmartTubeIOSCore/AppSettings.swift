@@ -209,7 +209,10 @@ public struct AppSettings: Codable {
     /// Canonical ordered list of selectable seek-interval values (seconds) — used by Stepper on iOS and Picker on tvOS.
     public static let availableSeekOptions: [Int] = [5, 10, 15, 20, 30, 45, 60]
 
+    /// Portrait windows stay at three columns; a fourth column squeezes tiles below a
+    /// readable width. Landscape windows are wide enough for six.
     public static let availableGridColumnCounts: ClosedRange<Int> = 1...3
+    public static let availableGridColumnCountsLandscape: ClosedRange<Int> = 1...6
 
     /// `.system` keeps the `AccentColor` asset from the app bundle.
     public enum AccentColorChoice: String, Codable, CaseIterable, Sendable {
@@ -465,17 +468,18 @@ extension AppSettings {
         themeName = c.safeDecode(ThemeName.self, forKey: .themeName, default: d.themeName)
         language = c.safeDecode(AppLanguage.self, forKey: .language, default: d.language)
         accentColor = c.safeDecode(AccentColorChoice.self, forKey: .accentColor, default: d.accentColor)
-        let columns = Self.availableGridColumnCounts
+        let portraitColumns = Self.availableGridColumnCounts
+        let landscapeColumns = Self.availableGridColumnCountsLandscape
         gridColumnsPortrait = min(
             max(
-                c.safeDecode(Int.self, forKey: .gridColumnsPortrait, default: d.gridColumnsPortrait), columns.lowerBound
-            ),
-            columns.upperBound)
+                c.safeDecode(Int.self, forKey: .gridColumnsPortrait, default: d.gridColumnsPortrait),
+                portraitColumns.lowerBound),
+            portraitColumns.upperBound)
         gridColumnsLandscape = min(
             max(
                 c.safeDecode(Int.self, forKey: .gridColumnsLandscape, default: d.gridColumnsLandscape),
-                columns.lowerBound),
-            columns.upperBound)
+                landscapeColumns.lowerBound),
+            landscapeColumns.upperBound)
         enabledSections = c.safeDecode(
             [BrowseSection.SectionType].self, forKey: .enabledSections, default: d.enabledSections)
         historyState = c.safeDecode(HistoryState.self, forKey: .historyState, default: d.historyState)

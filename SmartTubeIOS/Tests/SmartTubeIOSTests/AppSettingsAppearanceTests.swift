@@ -31,11 +31,18 @@ struct AppSettingsAppearanceTests {
         #expect(try decode(#"{"accentColor": "chartreuse"}"#).accentColor == .system)
     }
 
-    @Test("Column counts are clamped to the selectable range")
+    @Test("Column counts are clamped to their selectable range")
     func columnsClamped() throws {
         let settings = try decode(#"{"gridColumnsPortrait": 0, "gridColumnsLandscape": 9}"#)
         #expect(settings.gridColumnsPortrait == 1)
-        #expect(settings.gridColumnsLandscape == 3)
+        #expect(settings.gridColumnsLandscape == 6)
+    }
+
+    @Test("Landscape accepts up to six columns, portrait stops at three")
+    func columnRangesDiffer() throws {
+        let settings = try decode(#"{"gridColumnsPortrait": 4, "gridColumnsLandscape": 6}"#)
+        #expect(settings.gridColumnsPortrait == 3)
+        #expect(settings.gridColumnsLandscape == 6)
     }
 
     @Test("Valid column counts are preserved")

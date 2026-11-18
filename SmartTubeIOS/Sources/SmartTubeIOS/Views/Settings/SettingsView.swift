@@ -318,7 +318,7 @@ public struct SettingsView: View {
             .disabled(store.settings.compactThumbnails)
             .accessibilityIdentifier("settings.gridColumnsPortraitPicker")
             Picker(L10n.string("Columns (Landscape)"), selection: $store.settings.gridColumnsLandscape) {
-                ForEach(AppSettings.availableGridColumnCounts, id: \.self) {
+                ForEach(AppSettings.availableGridColumnCountsLandscape, id: \.self) {
                     Text("\($0)", bundle: L10n.bundle).tag($0)
                 }
             }
