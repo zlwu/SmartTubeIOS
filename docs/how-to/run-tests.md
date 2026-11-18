@@ -47,13 +47,9 @@ it without more RAM.
 
 ## Keychain (auth token) storage in local runs
 
-SwiftPM test bundles and ad-hoc signed debug builds change their cdhash on every build. Reading a
-Keychain item written by an earlier build therefore triggers the macOS authorization dialog, which
-blocks the run until someone clicks it, and "Always Allow" can never stick. The earlier in-memory
-debug store avoided the dialog but dropped the sign-in on every relaunch.
-
-Debug builds now default to `FileKeychainStore` (see
-[ADR-0010](../adr/0010-debug-file-backed-keychain.md)):
+Every build stores auth tokens in `FileKeychainStore` (see
+[ADR-0010](../adr/0010-debug-file-backed-keychain.md)). It never calls Security.framework, so the
+ad-hoc-signed-build authorization dialog cannot appear, and the sign-in survives relaunches.
 
 | Item | Value |
 |---|---|
@@ -64,22 +60,11 @@ Debug builds now default to `FileKeychainStore` (see
 
 The app logs the resolved path at launch: `KeychainStore: using file store at <path>`.
 
-| `SMARTTUBE_KEYCHAIN` | Debug | Release |
-|---|---|---|
-| unset | file store | real Keychain |
-| `file` | file store | file store (local runs only) |
-| `memory` | in-memory | real Keychain |
-| `keychain` | real Keychain (prompts) | real Keychain |
-
-- Unit tests are detected automatically and use the in-memory store, so they never read or write
-  the debug files. UI tests that pass `--uitesting` do the same; the five tvOS suites that do not
-  pass it set `launchEnvironment["SMARTTUBE_KEYCHAIN"] = "memory"` explicitly.
+- Unit tests inject `InMemoryKeychainStore` directly, so they never read or write the credential
+  files.
 - `SMARTTUBE_KEYCHAIN_DIR` overrides the root (absolute path; `~` is expanded). The app is
   sandboxed, so the value must be writable by it — `~/.config` and repo paths are not.
-- The debug store is plaintext. It is compiled in all configurations only so a *local* Release run
-  can opt in; App Store builds never set the variable. Never ship a Release build with
-  `SMARTTUBE_KEYCHAIN=file`, and never point `SMARTTUBE_KEYCHAIN_DIR` at a tracked path or commit
-  its contents.
-- A locally packaged macOS app (`just macos-package`) does not inherit shell variables when opened
-  from Finder: use `launchctl setenv SMARTTUBE_KEYCHAIN file` before launching it, or keep the real
-  Keychain.
+- Tokens are plaintext inside the app sandbox, in Release builds too. Do not point
+  `SMARTTUBE_KEYCHAIN_DIR` at a tracked path or commit its contents.
+- A locally packaged macOS app (`just macos-package`) reads the same container path; no environment
+  variable is needed.

@@ -19,7 +19,6 @@ final class TVFocusChainUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchEnvironment["SMARTTUBE_KEYCHAIN"] = "memory"
         app.launch()
     }
 

@@ -5,8 +5,7 @@ private let fileKeychainLog = Logger(subsystem: appSubsystem, category: "Keychai
 
 // MARK: - FileKeychainStore
 //
-// Directory-backed stand-in for the Keychain, used by local debug runs and by
-// an explicit `SMARTTUBE_KEYCHAIN=file` local Release run (see ADR-0010).
+// Directory-backed credential store used by every build (see ADR-0010).
 //
 // Layout: <root>/<encoded service>/<encoded key>; the file contents are the raw
 // UTF-8 value. One file per key keeps writes atomic and independent, so a
@@ -24,29 +23,9 @@ final class FileKeychainStore: KeychainStoring, @unchecked Sendable {
 
     let directory: URL
 
-    init?(directory: URL) {
-        let fileManager = FileManager.default
-        var isDirectory: ObjCBool = false
-        if fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory) {
-            guard isDirectory.boolValue else { return nil }
-        } else {
-            do {
-                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            } catch {
-                fileKeychainLog.error(
-                    "cannot create debug keychain directory at \(directory.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
-                )
-                return nil
-            }
-        }
-
+    init(directory: URL) {
         self.directory = directory
-        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-
-        var excluded = directory
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try? excluded.setResourceValues(values)
+        prepareDirectory()
     }
 
     func get(service: String, key: String) -> String? {
@@ -57,7 +36,7 @@ final class FileKeychainStore: KeychainStoring, @unchecked Sendable {
         guard let data = try? Data(contentsOf: url) else { return nil }
         guard let value = String(data: data, encoding: .utf8) else {
             fileKeychainLog.error(
-                "unreadable debug keychain value at \(url.path, privacy: .public)")
+                "unreadable credential value at \(url.path, privacy: .public)")
             return nil
         }
         return value
@@ -84,7 +63,7 @@ final class FileKeychainStore: KeychainStoring, @unchecked Sendable {
             try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch {
             fileKeychainLog.error(
-                "cannot write debug keychain value at \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                "cannot write credential value at \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
             )
         }
     }
@@ -94,6 +73,32 @@ final class FileKeychainStore: KeychainStoring, @unchecked Sendable {
         Self.lock.lock()
         defer { Self.lock.unlock() }
         try? FileManager.default.removeItem(at: url)
+    }
+
+    /// Root directory: `SMARTTUBE_KEYCHAIN_DIR` when it names an absolute path
+    /// (a leading `~` is expanded), otherwise Application Support. The app is
+    /// sandboxed, so the default resolves inside its container.
+    static func defaultDirectory(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        if let raw = environment["SMARTTUBE_KEYCHAIN_DIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty
+        {
+            let expanded = NSString(string: raw).expandingTildeInPath
+            if expanded.hasPrefix("/") {
+                return URL(fileURLWithPath: expanded, isDirectory: true)
+            }
+            fileKeychainLog.notice(
+                "SMARTTUBE_KEYCHAIN_DIR is not absolute; using the default directory")
+        }
+
+        let base =
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return
+            base
+            .appendingPathComponent(appSubsystem, isDirectory: true)
+            .appendingPathComponent(defaultDirectoryName, isDirectory: true)
     }
 
     /// File URL for a key. Internal so tests can corrupt or inspect files directly.
@@ -121,5 +126,24 @@ final class FileKeychainStore: KeychainStoring, @unchecked Sendable {
             return encoded.replacingOccurrences(of: ".", with: "%2E")
         }
         return encoded
+    }
+
+    private func prepareDirectory() {
+        let fileManager = FileManager.default
+        let path = directory.path
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            fileKeychainLog.error(
+                "cannot create credential directory at \(path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+            return
+        }
+        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path)
+
+        var root = directory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? root.setResourceValues(values)
     }
 }
