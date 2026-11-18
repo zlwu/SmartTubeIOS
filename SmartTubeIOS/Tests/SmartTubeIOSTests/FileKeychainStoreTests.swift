@@ -145,27 +145,14 @@ struct FileKeychainStoreTests {
             .intValue
     }
 
-    // MARK: - Directory selection
+    // MARK: - Default directory
 
-    @Test("SMARTTUBE_KEYCHAIN_DIR accepts absolute and tilde paths")
-    func directoryOverride() {
-        let absolute = FileKeychainStore.defaultDirectory(
-            environment: ["SMARTTUBE_KEYCHAIN_DIR": "/tmp/smarttube-credentials"])
-        #expect(absolute.path == "/tmp/smarttube-credentials")
-
-        let tilde = FileKeychainStore.defaultDirectory(
-            environment: ["SMARTTUBE_KEYCHAIN_DIR": "~/smarttube-credentials"])
-        #expect(tilde.path.hasPrefix("/"))
-        #expect(tilde.lastPathComponent == "smarttube-credentials")
-        #expect(!tilde.path.contains("~"))
-
-        let relative = FileKeychainStore.defaultDirectory(
-            environment: ["SMARTTUBE_KEYCHAIN_DIR": "relative/path"])
-        #expect(relative.lastPathComponent == FileKeychainStore.defaultDirectoryName)
-
-        let empty = FileKeychainStore.defaultDirectory(environment: ["SMARTTUBE_KEYCHAIN_DIR": "  "])
-        #expect(empty.lastPathComponent == FileKeychainStore.defaultDirectoryName)
-        #expect(empty.deletingLastPathComponent().lastPathComponent == appSubsystem)
+    @Test("the default directory lives under Application Support")
+    func defaultDirectory() {
+        let directory = FileKeychainStore.defaultDirectory
+        #expect(directory.lastPathComponent == FileKeychainStore.defaultDirectoryName)
+        #expect(directory.deletingLastPathComponent().lastPathComponent == appSubsystem)
+        #expect(directory.path.contains("Application Support"))
     }
 }
 #endif

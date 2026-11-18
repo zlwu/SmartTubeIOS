@@ -75,23 +75,9 @@ final class FileKeychainStore: KeychainStoring, @unchecked Sendable {
         try? FileManager.default.removeItem(at: url)
     }
 
-    /// Root directory: `SMARTTUBE_KEYCHAIN_DIR` when it names an absolute path
-    /// (a leading `~` is expanded), otherwise Application Support. The app is
-    /// sandboxed, so the default resolves inside its container.
-    static func defaultDirectory(
-        environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> URL {
-        if let raw = environment["SMARTTUBE_KEYCHAIN_DIR"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty
-        {
-            let expanded = NSString(string: raw).expandingTildeInPath
-            if expanded.hasPrefix("/") {
-                return URL(fileURLWithPath: expanded, isDirectory: true)
-            }
-            fileKeychainLog.notice(
-                "SMARTTUBE_KEYCHAIN_DIR is not absolute; using the default directory")
-        }
-
+    /// Fixed root: Application Support/<bundle-id>/DebugKeychain. The app is
+    /// sandboxed, so this resolves inside its container. There is no override.
+    static var defaultDirectory: URL {
         let base =
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory

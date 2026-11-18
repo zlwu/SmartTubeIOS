@@ -16,8 +16,8 @@ decision, every build now uses one simple backend instead of choosing per config
 
 Every build (Debug and Release, all platforms) uses `FileKeychainStore`: one file per key under
 `Application Support/<bundle-id>/DebugKeychain`, files `0600`, directories `0700`, excluded from
-backup, cleared by sign-out. `SMARTTUBE_KEYCHAIN_DIR` may override the root. `SecurityKeychainStore`
-and the runtime backend switch are removed; unit tests inject `InMemoryKeychainStore` directly.
+backup, cleared by sign-out. The path is fixed: no environment variable and no backend switch.
+`SecurityKeychainStore` and the in-memory store are removed; unit tests use throwaway directories.
 
 ## Consequences
 - Good: no Keychain authorization dialogs in any build; sign-in survives relaunch and rebuild; one
@@ -30,7 +30,7 @@ and the runtime backend switch are removed; unit tests inject `InMemoryKeychainS
 
 ## Alternatives considered
 - Keep the real Keychain as the Release default: rejected by the owner in favour of one backend.
-- Runtime `SMARTTUBE_KEYCHAIN=memory|file|keychain` selection: removed — the simpler rule is always
-  file.
+- Runtime `SMARTTUBE_KEYCHAIN` selection and `SMARTTUBE_KEYCHAIN_DIR`: removed — the simpler rule
+  is always file at one fixed path.
 - Build-time "packaged build" marker: rejected — a missed marker silently changes credential
   storage.

@@ -60,11 +60,8 @@ ad-hoc-signed-build authorization dialog cannot appear, and the sign-in survives
 
 The app logs the resolved path at launch: `KeychainStore: using file store at <path>`.
 
-- Unit tests inject `InMemoryKeychainStore` directly, so they never read or write the credential
+- Unit tests use a throwaway temporary directory, so they never read or write the app's credential
   files.
-- `SMARTTUBE_KEYCHAIN_DIR` overrides the root (absolute path; `~` is expanded). The app is
-  sandboxed, so the value must be writable by it — `~/.config` and repo paths are not.
-- Tokens are plaintext inside the app sandbox, in Release builds too. Do not point
-  `SMARTTUBE_KEYCHAIN_DIR` at a tracked path or commit its contents.
-- A locally packaged macOS app (`just macos-package`) reads the same container path; no environment
-  variable is needed.
+- The root is fixed; there is no environment variable or backend switch.
+- Tokens are plaintext inside the app sandbox, in Release builds too.
+- A locally packaged macOS app (`just macos-package`) reads the same container path.
